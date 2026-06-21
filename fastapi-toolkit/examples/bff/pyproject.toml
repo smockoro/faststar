@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bff"
+version = "0.1.0"
+description = "BFF - EntraID OIDC認証を担うバックエンドフォーフロントエンド"
+requires-python = ">=3.14"
+dependencies = [
+  "aiohttp>=3.11",
+  "fastapi>=0.115",
+  "itsdangerous>=2.2",
+  "msal>=1.31",
+  "python-dotenv>=1.0",
+  "uvicorn[standard]>=0.34",
+  "fastapi-toolkit",
+]
+
+[tool.uv.sources]
+fastapi-toolkit = { path = "../../", editable = true }
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=1.0",
+  "httpx>=0.28",
+  "ruff>=0.11",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bff"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath // empty' | { read -r f; if echo \"$f\" | grep -qE '\\.py$'; then dir=$(echo \"$f\" | grep -oP '(fastmcp-toolkit|fastapi-toolkit)' | head -1); if [ -n \"$dir\" ]; then cd \"$dir\" && uv run ruff check src/ tests/; fi; fi; } 2>/dev/null || true",
+            "statusMessage": "Running ruff check..."
+          },
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath // empty' | { read -r f; if echo \"$f\" | grep -qE '\\.py$'; then dir=$(echo \"$f\" | grep -oP '(fastmcp-toolkit|fastapi-toolkit)' | head -1); if [ -n \"$dir\" ]; then cd \"$dir\" && uv run ruff format --check src/ tests/; fi; fi; } 2>/dev/null || true",
+            "statusMessage": "Running ruff format check..."
+          },
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath // empty' | { read -r f; if echo \"$f\" | grep -qE '\\.py$'; then dir=$(echo \"$f\" | grep -oP '(fastmcp-toolkit|fastapi-toolkit)' | head -1); if [ -n \"$dir\" ]; then cd \"$dir\" && uv run pytest; fi; fi; } 2>/dev/null || true",
+            "statusMessage": "Running pytest..."
+          }
+        ]
+      }
+    ]
+  }
+}

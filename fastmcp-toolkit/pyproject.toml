@@ -1,0 +1,45 @@
+[project]
+name = "fastmcp-toolkit"
+version = "0.1.0"
+description = "A collection of useful utilities for FastMCP applications"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "core-toolkit",
+    "fastmcp>=2.0",
+    "structlog>=24.0",
+]
+
+[tool.uv.sources]
+core-toolkit = { path = "../core-toolkit", editable = true }
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.27",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+telemetry = [
+    "opentelemetry-distro",
+    "opentelemetry-exporter-otlp",
+    "opentelemetry-exporter-prometheus",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fastmcp_toolkit"]
+
+[tool.ruff]
+target-version = "py314"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cp /home/ubuntu/py-workspace/minerva/mcp/fastmcp-toolkit/src/fastmcp_toolkit/__init__.py fastmcp-toolkit/src/fastmcp_toolkit/__init__.py)",
+      "Bash(cp /home/ubuntu/py-workspace/minerva/mcp/fastmcp-toolkit/src/fastmcp_toolkit/server.py fastmcp-toolkit/src/fastmcp_toolkit/server.py)",
+      "Bash(cp /home/ubuntu/py-workspace/minerva/mcp/fastmcp-toolkit/src/fastmcp_toolkit/logging.py fastmcp-toolkit/src/fastmcp_toolkit/logging.py)",
+      "Bash(cp /home/ubuntu/py-workspace/minerva/mcp/fastmcp-toolkit/src/fastmcp_toolkit/health.py fastmcp-toolkit/src/fastmcp_toolkit/health.py)",
+      "Bash(cp /home/ubuntu/py-workspace/minerva/mcp/fastmcp-toolkit/src/fastmcp_toolkit/metrics.py fastmcp-toolkit/src/fastmcp_toolkit/metrics.py)",
+      "Bash(cp /home/ubuntu/py-workspace/minerva/mcp/fastmcp-toolkit/tests/conftest.py fastmcp-toolkit/tests/conftest.py)",
+      "Bash(cp /home/ubuntu/py-workspace/minerva/mcp/fastmcp-toolkit/tests/test_middleware_tool_metrics.py fastmcp-toolkit/tests/test_middleware_tool_metrics.py)",
+      "Bash(cp /home/ubuntu/py-workspace/minerva/mcp/fastmcp-toolkit/tests/test_middleware_access_log.py fastmcp-toolkit/tests/test_middleware_access_log.py)",
+      "Bash(cp /home/ubuntu/py-workspace/minerva/mcp/fastmcp-toolkit/tests/test_log_format.py fastmcp-toolkit/tests/test_log_format.py)",
+      "Bash(cp /home/ubuntu/py-workspace/minerva/mcp/fastmcp-toolkit/tests/test_util.py fastmcp-toolkit/tests/test_util.py)",
+      "Bash(cp /home/ubuntu/py-workspace/entraid-auth-sample/fastapi-toolkit/src/fastapi_toolkit/__init__.py fastapi-toolkit/src/fastapi_toolkit/__init__.py)",
+      "Bash(cp /home/ubuntu/py-workspace/entraid-auth-sample/fastapi-toolkit/src/fastapi_toolkit/middleware.py fastapi-toolkit/src/fastapi_toolkit/middleware.py)",
+      "Bash(cp /home/ubuntu/py-workspace/entraid-auth-sample/fastapi-toolkit/src/fastapi_toolkit/logging.py fastapi-toolkit/src/fastapi_toolkit/logging.py)",
+      "Bash(cp /home/ubuntu/py-workspace/entraid-auth-sample/fastapi-toolkit/src/fastapi_toolkit/lifespan.py fastapi-toolkit/src/fastapi_toolkit/lifespan.py)",
+      "Bash(cp /home/ubuntu/py-workspace/entraid-auth-sample/fastapi-toolkit/tests/__init__.py fastapi-toolkit/tests/__init__.py)",
+      "Bash(uv sync *)",
+      "Bash(uv run *)",
+      "Bash(xargs ls -la)",
+      "Bash(xargs ls -1)"
+    ]
+  }
+}
