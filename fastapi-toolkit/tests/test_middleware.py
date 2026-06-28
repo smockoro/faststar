@@ -4,14 +4,21 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from fastapi_toolkit import AccessLogMiddleware, SecurityHeadersMiddleware
+from fastapi_toolkit import (
+    AccessLogMiddleware,
+    COOPMiddleware,
+    CSPMiddleware,
+    FrameGuardMiddleware,
+    NoSniffMiddleware,
+    ReferrerPolicyMiddleware,
+)
 
 
 @pytest.fixture
 def json_app() -> FastAPI:
-    """JSONプリセットのSecurityHeadersMiddleware付きアプリ。"""
+    """NoSniffMiddleware付きアプリ（API向け最小構成）。"""
     app = FastAPI()
-    app.add_middleware(SecurityHeadersMiddleware, preset="json")
+    app.add_middleware(NoSniffMiddleware)
     app.add_middleware(AccessLogMiddleware)
 
     @app.get("/ping")
@@ -23,9 +30,25 @@ def json_app() -> FastAPI:
 
 @pytest.fixture
 def html_app() -> FastAPI:
-    """HTMLプリセットのSecurityHeadersMiddleware付きアプリ。"""
+    """UI向けセキュリティヘッダー付きアプリ。"""
     app = FastAPI()
-    app.add_middleware(SecurityHeadersMiddleware, preset="html")
+    app.add_middleware(
+        CSPMiddleware,
+        directives={
+            "default-src": "'self'",
+            "script-src": "'self'",
+            "style-src": "'self' 'unsafe-inline'",
+            "img-src": "'self' data: https:",
+            "connect-src": "'self'",
+            "frame-ancestors": "'self'",
+            "base-uri": "'self'",
+            "form-action": "'self'",
+        },
+    )
+    app.add_middleware(COOPMiddleware)
+    app.add_middleware(ReferrerPolicyMiddleware, policy="strict-origin-when-cross-origin")
+    app.add_middleware(FrameGuardMiddleware, action="SAMEORIGIN")
+    app.add_middleware(NoSniffMiddleware)
 
     @app.get("/page")
     async def page() -> str:
@@ -45,8 +68,8 @@ async def test_access_log_middleware_passes_requests(json_app: FastAPI):
 
 
 @pytest.mark.asyncio
-async def test_security_headers_json_preset(json_app: FastAPI):
-    """JSONプリセットではX-Content-Type-Optionsのみ付与される。"""
+async def test_security_headers_json(json_app: FastAPI):
+    """API向け構成ではX-Content-Type-Optionsのみ付与される。"""
     async with AsyncClient(transport=ASGITransport(app=json_app), base_url="http://test") as client:
         resp = await client.get("/ping")
 
@@ -56,8 +79,8 @@ async def test_security_headers_json_preset(json_app: FastAPI):
 
 
 @pytest.mark.asyncio
-async def test_security_headers_html_preset(html_app: FastAPI):
-    """HTMLプリセットではブラウザ保護ヘッダー一式が付与される。"""
+async def test_security_headers_html(html_app: FastAPI):
+    """UI向け構成ではブラウザ保護ヘッダー一式が付与される。"""
     async with AsyncClient(transport=ASGITransport(app=html_app), base_url="http://test") as client:
         resp = await client.get("/page")
 

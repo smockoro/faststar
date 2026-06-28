@@ -37,6 +37,8 @@ class ApplicationConfig(BaseModel):
     health_check_enabled: bool = True
     health_check_liveness_endpoint: str = "/readyz"
     health_check_readiness_endpoint: str = "/livez"
+    security_headers_enabled: bool = True
+    security_headers_hsts: bool = True
     transport_security_enabled: bool = False
     allowed_hosts: tuple[str, ...] = ()
     allowed_origins: tuple[str, ...] = ()

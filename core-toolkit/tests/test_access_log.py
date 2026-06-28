@@ -30,9 +30,7 @@ def _create_app() -> Starlette:
 
 
 async def _client(app: Starlette) -> AsyncClient:
-    return AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    )
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
 @pytest.mark.asyncio

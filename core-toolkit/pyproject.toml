@@ -20,6 +20,9 @@ dev = [
     "ruff>=0.8",
     "starlette>=0.48",
 ]
+telemetry = [
+    "opentelemetry-exporter-prometheus",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/core_toolkit"]

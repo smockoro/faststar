@@ -4,6 +4,18 @@ import logging
 import os
 
 import uvicorn
+from core_toolkit.middleware import (
+    AccessLogMiddleware,
+    CacheControlMiddleware,
+    HostValidationMiddleware,
+    HSTSMiddleware,
+    JsonContentTypeMiddleware,
+    NoSniffMiddleware,
+    OriginValidationMiddleware,
+    ReferrerPolicyMiddleware,
+    ServerHeaderStripMiddleware,
+    SSEBufferingMiddleware,
+)
 from fastmcp import FastMCP
 
 from fastmcp_toolkit.config.application_config import (
@@ -13,7 +25,6 @@ from fastmcp_toolkit.config.application_config import (
 from fastmcp_toolkit.health import ReadinessCheck, register_health_endpoints
 from fastmcp_toolkit.logging import setup_logging
 from fastmcp_toolkit.metrics import register_metrics_endpoint
-from core_toolkit.middleware import AccessLogMiddleware, TransportSecurityASGIMiddleware
 from fastmcp_toolkit.middleware import ErrorLoggerMiddleware, LogContextMiddleware
 from fastmcp_toolkit.middleware.tool_metrics import ToolMetricsMiddleware
 from fastmcp_toolkit.middleware.tool_visibility import ToolVisibilityMiddleware
@@ -87,13 +98,27 @@ def run_server(
         app.add_middleware(ToolMetricsMiddleware())
 
     starlette_app = app.http_app()
+
     starlette_app.add_middleware(AccessLogMiddleware)
 
+    if application_config.security_headers_enabled:
+        starlette_app.add_middleware(SSEBufferingMiddleware)
+        starlette_app.add_middleware(ServerHeaderStripMiddleware)
+        if application_config.security_headers_hsts:
+            starlette_app.add_middleware(HSTSMiddleware)
+        starlette_app.add_middleware(ReferrerPolicyMiddleware)
+        starlette_app.add_middleware(CacheControlMiddleware)
+        starlette_app.add_middleware(NoSniffMiddleware)
+
     if application_config.transport_security_enabled:
+        starlette_app.add_middleware(JsonContentTypeMiddleware)
         starlette_app.add_middleware(
-            TransportSecurityASGIMiddleware,
-            allowed_hosts=application_config.allowed_hosts,
+            OriginValidationMiddleware,
             allowed_origins=application_config.allowed_origins,
+        )
+        starlette_app.add_middleware(
+            HostValidationMiddleware,
+            allowed_hosts=application_config.allowed_hosts,
         )
 
     uvicorn.run(

@@ -203,13 +203,14 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28" },
+    { name = "opentelemetry-exporter-prometheus", marker = "extra == 'telemetry'" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "starlette", marker = "extra == 'dev'", specifier = ">=0.48" },
     { name = "structlog", specifier = ">=24.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "telemetry"]
 
 [[package]]
 name = "cryptography"
