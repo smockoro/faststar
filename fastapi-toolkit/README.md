@@ -10,8 +10,8 @@ FastAPI アプリケーション向けの共通ユーティリティライブラ
 | `get_logger` | log_type付きの構造化ロガー取得 |
 | `RequestLoggingMiddleware` | リクエスト/レスポンスの構造化ログミドルウェア |
 | `create_lifespan` | 複数のLifespanResourceを合成するヘルパー |
-| `AioHttpLifespanResource` | aiohttp ClientSessionのライフサイクル管理 |
-| `HttpxLifespanResource` | httpx AsyncClientのライフサイクル管理 |
+| `AioHttpLifespanResource` / `get_aiohttp_client` | 名前付きaiohttp ClientSessionのライフサイクル管理（`fastapi_toolkit.aiohttp_lifespan`） |
+| `HttpxLifespanResource` / `get_httpx_client` | 名前付きhttpx AsyncClientのライフサイクル管理（`fastapi_toolkit.httpx_lifespan`） |
 
 ## インストール
 
@@ -43,14 +43,20 @@ async def hello():
 ### Lifespan管理
 
 ```python
-from fastapi import FastAPI
-from fastapi_toolkit.lifespan import create_lifespan, HttpxLifespanResource
+from fastapi import Depends, FastAPI
+from fastapi_toolkit.httpx_lifespan import HttpxLifespanResource, get_httpx_client
+from fastapi_toolkit.lifespan import create_lifespan
 
-app = FastAPI(lifespan=create_lifespan(HttpxLifespanResource()))
+get_backend_http_client = get_httpx_client("backend")
+
+app = FastAPI(
+    lifespan=create_lifespan(
+        HttpxLifespanResource("backend", timeout=10.0),
+    ),
+)
 
 @app.get("/fetch")
-async def fetch(request):
-    client = request.app.state.http_client
+async def fetch(client=Depends(get_backend_http_client)):
     resp = await client.get("https://example.com")
     return {"status": resp.status_code}
 ```

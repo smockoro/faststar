@@ -125,10 +125,9 @@ name = "bff"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "aiohttp" },
     { name = "core-toolkit", extra = ["telemetry"] },
     { name = "fastapi" },
-    { name = "fastapi-toolkit", extra = ["redis"] },
+    { name = "fastapi-toolkit", extra = ["aiohttp", "redis"] },
     { name = "itsdangerous" },
     { name = "msal" },
     { name = "python-dotenv" },
@@ -146,10 +145,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = ">=3.11" },
     { name = "core-toolkit", extras = ["telemetry"], editable = "../../../core-toolkit" },
     { name = "fakeredis", marker = "extra == 'dev'", specifier = ">=2.20" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "fastapi-toolkit", extras = ["aiohttp"], editable = "../../" },
     { name = "fastapi-toolkit", extras = ["redis"], editable = "../../" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28" },
     { name = "itsdangerous", specifier = ">=2.2" },
@@ -275,6 +274,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+aiohttp = [
+    { name = "aiohttp" },
+]
 redis = [
     { name = "redis" },
 ]
@@ -393,6 +395,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+aiohttp = [
+    { name = "core-toolkit", extra = ["aiohttp"] },
+]
 redis = [
     { name = "core-toolkit", extra = ["redis"] },
 ]

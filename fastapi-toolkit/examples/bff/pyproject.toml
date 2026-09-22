@@ -8,13 +8,13 @@ version = "0.1.0"
 description = "BFF - EntraID OIDC認証を担うバックエンドフォーフロントエンド"
 requires-python = ">=3.14"
 dependencies = [
-  "aiohttp>=3.11",
   "fastapi>=0.115",
   "itsdangerous>=2.2",
   "msal>=1.31",
   "python-dotenv>=1.0",
   "uvicorn[standard]>=0.34",
   "fastapi-toolkit[redis]",
+  "fastapi-toolkit[aiohttp]",
   # core-toolkitの__init__.pyがopentelemetryを無条件importするための回避策（未修正の既存バグ）
   "core-toolkit[telemetry]",
 ]
