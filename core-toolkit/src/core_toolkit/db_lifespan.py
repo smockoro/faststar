@@ -18,26 +18,6 @@ from starlette.requests import Request
 from core_toolkit.lifespan import LifespanResource
 
 
-class _DisposableAsyncEngine:
-    """Wrapper that prevents usage after disposal."""
-
-    def __init__(self, engine: AsyncEngine) -> None:
-        object.__setattr__(self, "_engine", engine)
-        object.__setattr__(self, "_is_disposed", False)
-
-    def __getattr__(self, name: str) -> Any:
-        is_disposed = object.__getattribute__(self, "_is_disposed")
-        if is_disposed:
-            raise RuntimeError("Engine has been disposed")
-        engine = object.__getattribute__(self, "_engine")
-        return getattr(engine, name)
-
-    async def dispose(self) -> None:
-        object.__setattr__(self, "_is_disposed", True)
-        engine = object.__getattribute__(self, "_engine")
-        return await engine.dispose()
-
-
 class DbLifespanResource(LifespanResource):
     """名前付きでAsyncEngineを登録するリソース。同じappに複数登録できる。
 
@@ -56,14 +36,13 @@ class DbLifespanResource(LifespanResource):
     @asynccontextmanager
     async def context(self, app: Starlette) -> AsyncGenerator[Any, Any]:
         engine = create_async_engine(self._url, **self._engine_kwargs)
-        wrapped_engine = _DisposableAsyncEngine(engine)
-        engines: dict[str, Any] = getattr(app.state, "db_engines", {})
-        app.state.db_engines = {**engines, self._name: wrapped_engine}
+        engines: dict[str, AsyncEngine] = getattr(app.state, "db_engines", {})
+        app.state.db_engines = {**engines, self._name: engine}
 
         try:
-            yield wrapped_engine
+            yield engine
         finally:
-            await wrapped_engine.dispose()
+            await engine.dispose()
 
 
 def get_db_engine(name: str) -> Callable[[Request], AsyncEngine]:
@@ -112,7 +91,14 @@ def get_db_connection(
     """
 
     async def get_connection(request: Request) -> AsyncGenerator[AsyncConnection]:
-        engine = get_db_engine(name)(request)
+        engines: dict[str, AsyncEngine] = getattr(request.app.state, "db_engines", {})
+        if name not in engines:
+            raise RuntimeError(
+                f"db_engines['{name}'] is not set. "
+                f"Did you forget to register DbLifespanResource(name='{name}', ...) "
+                "in create_lifespan(...)?"
+            )
+        engine = engines[name]
         async with engine.begin() as conn:
             yield conn
 
