@@ -1,6 +1,5 @@
 """db_lifespanの統合テスト。"""
 
-
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -55,27 +54,29 @@ async def test_multiple_engines_registered_independently():
 
 
 @pytest.mark.asyncio
-async def test_db_lifespan_resource_disposes_engine_on_exit():
+async def test_db_lifespan_resource_disposes_engine_on_exit(
+    monkeypatch: pytest.MonkeyPatch,
+):
     app = Starlette()
     lifespan = create_lifespan(
         DbLifespanResource("main", "sqlite+aiosqlite:///:memory:")
     )
 
-    engine_ref = None
+    disposed = False
+    original_dispose = AsyncEngine.dispose
+
+    async def tracking_dispose(self, *args, **kwargs):
+        nonlocal disposed
+        disposed = True
+        await original_dispose(self, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncEngine, "dispose", tracking_dispose)
 
     async with lifespan(app):
-        engine_ref = get_db_engine("main")(_make_request(app))
-        # Verify engine is usable during lifespan
-        async with engine_ref.connect() as conn:
-            result = await conn.execute(text("SELECT 1"))
-            assert result.scalar() == 1
+        engine = get_db_engine("main")(_make_request(app))
+        assert isinstance(engine, AsyncEngine)
 
-    # After lifespan exits, verify engine was properly initialized
-    # The dispose() call happens in the finally block of context(),
-    # which we can verify by checking the engine reference still exists
-    # and was properly registered and cleaned up
-    assert isinstance(engine_ref, AsyncEngine)
-    assert hasattr(engine_ref, "dispose")
+    assert disposed
 
 
 @pytest.mark.asyncio
