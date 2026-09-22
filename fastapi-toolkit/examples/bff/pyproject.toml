@@ -14,7 +14,8 @@ dependencies = [
   "msal>=1.31",
   "python-dotenv>=1.0",
   "uvicorn[standard]>=0.34",
-  "fastapi-toolkit",
+  "fastapi-toolkit[redis]",
+  "opentelemetry-exporter-prometheus",
 ]
 
 [tool.uv.sources]
@@ -25,6 +26,7 @@ dev = [
   "pytest>=8.0",
   "pytest-asyncio>=1.0",
   "httpx>=0.28",
+  "fakeredis>=2.20",
   "ruff>=0.11",
 ]
 
