@@ -52,6 +52,12 @@ async def test_multiple_clients_registered_independently(
         session_client = get_redis_client("session")(_make_request(app))
         assert cache_client is not session_client
 
+        # objectとしての別物性だけでなく、"cache"への書き込みが"session"側の
+        # キーには見えないこと（名前ごとに正しくキー分けされていること）も
+        # 検証する。
+        await cache_client.set("k", "v")
+        assert await session_client.get("k") is None
+
 
 @pytest.mark.asyncio
 async def test_redis_lifespan_resource_closes_client_on_exit(
