@@ -1249,12 +1249,6 @@ app = FastAPI(
     lifespan=create_lifespan(
         AioHttpLifespanResource(
             _BACKEND_CLIENT_NAME,
-            connector=aiohttp.TCPConnector(
-                limit=100,
-                limit_per_host=20,
-                use_dns_cache=True,
-                ttl_dns_cache=0,
-            ),
             timeout=aiohttp.ClientTimeout(total=30, connect=10, sock_connect=5, sock_read=5),
         ),
         RedisLifespanResource("cache", settings.redis_url),
@@ -1329,7 +1323,9 @@ if __name__ == "__main__":
     uvicorn.run(app, host=settings.host, port=settings.port, access_log=False, log_config=None)
 ```
 
-（変更点は import の入れ替え、`_BACKEND_CLIENT_NAME`/`get_backend_http_client`/`BackendHttpClient`の追加、`AioHttpLifespanResource`の呼び出しに名前と旧デフォルト相当のkwargsを明示、`/backend/a`・`/backend/b`・`/backend/b/c`が`req.app.state.http_client`ではなく`session: BackendHttpClient`引数を受け取る点のみ。認証ロジック・`/hello`・cache機能は変更なし）
+（変更点は import の入れ替え、`_BACKEND_CLIENT_NAME`/`get_backend_http_client`/`BackendHttpClient`の追加、`AioHttpLifespanResource`の呼び出しに名前と`timeout`を明示、`/backend/a`・`/backend/b`・`/backend/b/c`が`req.app.state.http_client`ではなく`session: BackendHttpClient`引数を受け取る点のみ。認証ロジック・`/hello`・cache機能は変更なし）
+
+**実装中に発覚した落とし穴（要注意）**: 当初案では`connector=aiohttp.TCPConnector(limit=100, ...)`も`AioHttpLifespanResource`の呼び出しにkwargsとして渡す想定だったが、これは動かない。`AioHttpLifespanResource.__init__`自体は`**session_kwargs`を保存するだけで実行時ループを必要としないが、`aiohttp.TCPConnector(...)`という式は呼び出し箇所（モジュールのトップレベル、`app = FastAPI(...)`の一部）で**即座に評価**される。aiohttp 3.14系の`TCPConnector.__init__`は稼働中のイベントループを要求するため、モジュールimport時点（イベントループなし）でのTCPConnector構築は`RuntimeError`になる。`aiohttp.ClientTimeout`はただのNamedTuple相当でループを必要としないため安全。対処として、接続プール数(`limit`等)のチューニングは移行時に落とし、`timeout`のみ引き継ぐことにした（toolkit側が`connector`を特別扱いして遅延構築する仕組みは「デフォルト値を一切注入しない」という設計方針——DB/Redisと同じくtoolkit側は下位クライアントの引数について何も知らない——と衝突するため見送った）。同様の接続プールチューニングが将来必要になった場合は、呼び出し側でイベントループが確実に存在するタイミング（例えば`lifespan`内の別のstartup処理）まで`TCPConnector`の構築を遅延させる設計を別途検討すること。
 
 - [ ] **Step 4: テストを実行し成功を確認**
 
