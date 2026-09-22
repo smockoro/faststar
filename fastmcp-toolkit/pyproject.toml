@@ -14,6 +14,12 @@ dependencies = [
 core-toolkit = { path = "../core-toolkit", editable = true }
 
 [project.optional-dependencies]
+aiohttp = [
+    "aiohttp>=3.14.1",
+]
+httpx = [
+    "httpx>=0.28",
+]
 redis = [
     "redis>=5.0",
 ]
