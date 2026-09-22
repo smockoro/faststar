@@ -1,11 +1,14 @@
 """FastAPIアプリケーション定義。"""
 
+from typing import Annotated
+
 import aiohttp
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi_toolkit import setup_logging
-from fastapi_toolkit.lifespan import AioHttpLifespanResource, create_lifespan
+from fastapi_toolkit.aiohttp_lifespan import AioHttpLifespanResource, get_aiohttp_client
+from fastapi_toolkit.lifespan import create_lifespan
 from fastapi_toolkit.logging import get_logger
 from fastapi_toolkit.redis_lifespan import RedisLifespanResource
 from starlette.middleware.sessions import SessionMiddleware
@@ -20,10 +23,17 @@ setup_logging(application_id="BFF")
 logger = get_logger(__name__)
 settings = load_application_settings()
 
+_BACKEND_CLIENT_NAME = "backend"
+get_backend_http_client = get_aiohttp_client(_BACKEND_CLIENT_NAME)
+BackendHttpClient = Annotated[aiohttp.ClientSession, Depends(get_backend_http_client)]
+
 app = FastAPI(
     title="BFF",
     lifespan=create_lifespan(
-        AioHttpLifespanResource(),
+        AioHttpLifespanResource(
+            _BACKEND_CLIENT_NAME,
+            timeout=aiohttp.ClientTimeout(total=30, connect=10, sock_connect=5, sock_read=5),
+        ),
         RedisLifespanResource("cache", settings.redis_url),
     ),
 )
@@ -42,15 +52,14 @@ async def hello() -> dict[str, str]:
 
 
 @app.get("/backend/a")
-async def backend_a(req: Request) -> dict[str, str]:
+async def backend_a(session: BackendHttpClient) -> dict[str, str]:
     """バックエンドAPI Aにアクセスする"""
-    session: aiohttp.ClientSession = req.app.state.http_client
     async with session.get(settings.backend_a_url) as response:
         return await response.json()
 
 
 @app.get("/backend/b")
-async def backend_b(req: Request) -> JSONResponse:
+async def backend_b(req: Request, session: BackendHttpClient) -> JSONResponse:
     """バックエンドAPI Bにアクセスする"""
     import msal
 
@@ -78,7 +87,6 @@ async def backend_b(req: Request) -> JSONResponse:
     save_token_cache(oid, cache)
     access_token = result["access_token"]
 
-    session: aiohttp.ClientSession = req.app.state.http_client
     async with session.get(
         settings.backend_b_url,
         headers={"Authorization": f"Bearer {access_token}"},
@@ -88,9 +96,8 @@ async def backend_b(req: Request) -> JSONResponse:
 
 
 @app.get("/backend/b/c")
-async def backend_b_c(req: Request) -> dict[str, str]:
+async def backend_b_c(session: BackendHttpClient) -> dict[str, str]:
     """バックエンドAPI BのCエンドポイントにアクセスする"""
-    session: aiohttp.ClientSession = req.app.state.http_client
     async with session.get(settings.backend_b_url + "/c") as response:
         return await response.json()
 
