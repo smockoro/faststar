@@ -24,6 +24,18 @@ dev = [
 telemetry = [
     "opentelemetry-exporter-prometheus",
 ]
+sqlite = [
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite>=0.20",
+]
+postgres = [
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+]
+mysql = [
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncmy>=0.2",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/core_toolkit"]
