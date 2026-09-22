@@ -186,14 +186,18 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-dev = [
+aiohttp = [
     { name = "aiohttp" },
+]
+dev = [
     { name = "fakeredis" },
-    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
     { name = "starlette" },
+]
+httpx = [
+    { name = "httpx" },
 ]
 mysql = [
     { name = "asyncmy" },
@@ -216,12 +220,12 @@ telemetry = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", marker = "extra == 'dev'", specifier = ">=3.14.1" },
+    { name = "aiohttp", marker = "extra == 'aiohttp'", specifier = ">=3.14.1" },
     { name = "aiosqlite", marker = "extra == 'sqlite'", specifier = ">=0.20" },
     { name = "asyncmy", marker = "extra == 'mysql'", specifier = ">=0.2" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.29" },
     { name = "fakeredis", marker = "extra == 'dev'", specifier = ">=2.20" },
-    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28" },
+    { name = "httpx", marker = "extra == 'httpx'", specifier = ">=0.28" },
     { name = "opentelemetry-exporter-prometheus", marker = "extra == 'telemetry'" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
@@ -233,7 +237,7 @@ requires-dist = [
     { name = "starlette", marker = "extra == 'dev'", specifier = ">=0.48" },
     { name = "structlog", specifier = ">=24.0" },
 ]
-provides-extras = ["redis", "dev", "telemetry", "sqlite", "postgres", "mysql"]
+provides-extras = ["redis", "aiohttp", "httpx", "dev", "telemetry", "sqlite", "postgres", "mysql"]
 
 [[package]]
 name = "fakeredis"
