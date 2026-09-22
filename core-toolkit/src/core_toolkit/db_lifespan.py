@@ -91,14 +91,7 @@ def get_db_connection(
     """
 
     async def get_connection(request: Request) -> AsyncGenerator[AsyncConnection]:
-        engines: dict[str, AsyncEngine] = getattr(request.app.state, "db_engines", {})
-        if name not in engines:
-            raise RuntimeError(
-                f"db_engines['{name}'] is not set. "
-                f"Did you forget to register DbLifespanResource(name='{name}', ...) "
-                "in create_lifespan(...)?"
-            )
-        engine = engines[name]
+        engine = get_db_engine(name)(request)
         async with engine.begin() as conn:
             yield conn
 

@@ -34,6 +34,9 @@ def db_lifespan(name: str, url: str, **engine_kwargs: Any) -> Lifespan:
     に格納し、終了時にdisposeする。``FastMCP(lifespan=db_lifespan(name, url))``
     として使う。他のlifespanと ``|`` 演算子で合成できる。名前ごとに
     ``lifespan_context`` のキーを分けるため、複数のDBを同時に登録できる。
+    同じ``name``で複数回``db_lifespan(...)``を登録した場合、``lifespan_context``の
+    キーが衝突し、後から登録した方で静かに上書きされる。同じ名前を重複登録しない
+    こと。
 
     Args:
         name: このエンジンを識別する名前。``CurrentDbEngine``/
@@ -87,7 +90,7 @@ def _get_db_connection(
     return get_connection
 
 
-def CurrentDbEngine(name: str) -> AsyncEngine:  # noqa: N802
+def CurrentDbEngine(name: str) -> AsyncEngine:
     """``db_lifespan(name, ...)`` が生成したAsyncEngineを取得するDepends。
 
     ``fastmcp.server.dependencies.CurrentContext`` と同じ命名パターンで、
@@ -108,9 +111,8 @@ def CurrentDbEngine(name: str) -> AsyncEngine:  # noqa: N802
     return cast(AsyncEngine, Depends(_get_db_engine(name)))
 
 
-def CurrentDbConnection(name: str) -> AsyncConnection:  # noqa: N802
-    """``db_lifespan(name, ...)`` のEngineから呼び出し単位のConnectionを取得する
-    Depends。
+def CurrentDbConnection(name: str) -> AsyncConnection:
+    """``db_lifespan(name, ...)``のEngineから呼び出し単位のConnectionを取得するDepends。
 
     ツール呼び出し1回＝1トランザクションとして扱う。正常終了でcommit、
     例外でrollback、いずれの場合も必ずclose。

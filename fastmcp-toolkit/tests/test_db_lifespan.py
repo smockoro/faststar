@@ -118,5 +118,15 @@ async def test_tool_raises_runtime_error_when_lifespan_not_registered():
         return type(engine).__name__
 
     async with Client(app) as client:
-        with pytest.raises(Exception, match="engine"):
+        with pytest.raises(Exception, match=r"Failed to resolve dependency 'engine'"):
             await client.call_tool("whoami", {})
+
+
+def test_get_db_engine_error_message_includes_registration_hint():
+    from types import SimpleNamespace
+
+    from fastmcp_toolkit.db_lifespan import _get_db_engine
+
+    get_engine = _get_db_engine("main")
+    with pytest.raises(RuntimeError, match="main"):
+        get_engine(SimpleNamespace(lifespan_context={}))
