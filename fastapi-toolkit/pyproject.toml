@@ -27,8 +27,12 @@ postgres = [
 mysql = [
   "core-toolkit[mysql]",
 ]
+redis = [
+  "core-toolkit[redis]",
+]
 dev = [
   "core-toolkit[telemetry]",
+  "fakeredis>=2.20",
   "pytest>=8.0",
   "pytest-asyncio>=1.0",
   "httpx>=0.28",

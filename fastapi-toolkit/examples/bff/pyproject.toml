@@ -14,17 +14,21 @@ dependencies = [
   "msal>=1.31",
   "python-dotenv>=1.0",
   "uvicorn[standard]>=0.34",
-  "fastapi-toolkit",
+  "fastapi-toolkit[redis]",
+  # core-toolkitの__init__.pyがopentelemetryを無条件importするための回避策（未修正の既存バグ）
+  "core-toolkit[telemetry]",
 ]
 
 [tool.uv.sources]
 fastapi-toolkit = { path = "../../", editable = true }
+core-toolkit = { path = "../../../core-toolkit", editable = true }
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",
   "pytest-asyncio>=1.0",
   "httpx>=0.28",
+  "fakeredis>=2.20",
   "ruff>=0.11",
 ]
 

@@ -7,9 +7,11 @@ from fastapi.responses import JSONResponse
 from fastapi_toolkit import setup_logging
 from fastapi_toolkit.lifespan import AioHttpLifespanResource, create_lifespan
 from fastapi_toolkit.logging import get_logger
+from fastapi_toolkit.redis_lifespan import RedisLifespanResource
 from starlette.middleware.sessions import SessionMiddleware
 
 from bff.auth import router as auth_router
+from bff.cache.router import router as cache_router
 from bff.config import load_application_settings
 from bff.token_cache import get_token_cache, save_token_cache
 
@@ -18,10 +20,17 @@ setup_logging(application_id="BFF")
 logger = get_logger(__name__)
 settings = load_application_settings()
 
-app = FastAPI(title="BFF", lifespan=create_lifespan(AioHttpLifespanResource()))
+app = FastAPI(
+    title="BFF",
+    lifespan=create_lifespan(
+        AioHttpLifespanResource(),
+        RedisLifespanResource("cache", settings.redis_url),
+    ),
+)
 
 app.add_middleware(SessionMiddleware, secret_key=settings.session_secret)
 app.include_router(auth_router)
+app.include_router(cache_router)
 
 app.state.azure_settings = settings
 

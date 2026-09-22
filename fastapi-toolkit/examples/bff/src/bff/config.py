@@ -35,16 +35,13 @@ class ApplicationSettings:
     redirect_uri: str = field(
         default_factory=lambda: os.environ.get("AZURE_REDIRECT_URI", "http://localhost:8000/auth/callback")
     )
-    scopes: list[str] = field(
-        default_factory=lambda: os.environ.get("AZURE_SCOPES", "openid,profile,email").split(",")
-    )
-    backend_b_scopes: list[str] = field(
-        default_factory=lambda: os.environ.get("AZURE_BACKEND_B_SCOPES", "").split(",")
-    )
+    scopes: list[str] = field(default_factory=lambda: os.environ.get("AZURE_SCOPES", "openid,profile,email").split(","))
+    backend_b_scopes: list[str] = field(default_factory=lambda: os.environ.get("AZURE_BACKEND_B_SCOPES", "").split(","))
     session_secret: str = field(default_factory=lambda: os.environ.get("SESSION_SECRET", "dev-secret-change-me"))
 
     backend_a_url: str = field(default_factory=lambda: os.environ.get("BACKEND_A_URL", "http://localhost:8001/api/a"))
     backend_b_url: str = field(default_factory=lambda: os.environ.get("BACKEND_B_URL", "http://localhost:8002/api/b"))
+    redis_url: str = field(default_factory=lambda: os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
 
     @property
     def authority(self) -> str:
