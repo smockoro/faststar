@@ -58,5 +58,5 @@ src = ["src"]
 select = ["E", "F", "I", "UP"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "examples"]
 asyncio_mode = "auto"

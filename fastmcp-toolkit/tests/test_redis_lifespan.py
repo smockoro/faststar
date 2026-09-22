@@ -16,6 +16,7 @@ from fastmcp_toolkit.redis_lifespan import CurrentRedisClient, redis_lifespan
 @pytest.mark.asyncio
 async def test_tool_resolves_redis_client_via_depends(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("fastmcp_toolkit.redis_lifespan.Redis", FakeRedis)
+    await FakeRedis.from_url("redis://localhost:6379/0").flushall()
 
     app = FastMCP("test", lifespan=redis_lifespan("cache", "redis://localhost:6379/0"))
 
@@ -36,6 +37,8 @@ async def test_tool_resolves_redis_client_via_depends(monkeypatch: pytest.Monkey
 @pytest.mark.asyncio
 async def test_multiple_named_clients_are_independent(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("fastmcp_toolkit.redis_lifespan.Redis", FakeRedis)
+    await FakeRedis.from_url("redis://localhost:6379/0").flushall()
+    await FakeRedis.from_url("redis://localhost:6379/1").flushall()
 
     app = FastMCP(
         "test",
@@ -48,7 +51,12 @@ async def test_multiple_named_clients_are_independent(monkeypatch: pytest.Monkey
         cache: Redis = CurrentRedisClient("cache"),
         session: Redis = CurrentRedisClient("session"),
     ) -> bool:
-        return cache is not session
+        # objectとしての別物性だけでなく、"cache"への書き込みが"session"側の
+        # キーには見えないこと（名前ごとに正しくキー分けされていること）も
+        # 検証する。
+        await cache.set("k", "cache-value")
+        session_value = await session.get("k")
+        return cache is not session and session_value is None
 
     async with Client(app) as client:
         result = await client.call_tool("compare", {})

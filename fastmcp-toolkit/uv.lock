@@ -268,10 +268,12 @@ requires-dist = [
     { name = "aiosqlite", marker = "extra == 'sqlite'", specifier = ">=0.20" },
     { name = "asyncmy", marker = "extra == 'mysql'", specifier = ">=0.2" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.29" },
+    { name = "fakeredis", marker = "extra == 'dev'", specifier = ">=2.20" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28" },
     { name = "opentelemetry-exporter-prometheus", marker = "extra == 'telemetry'" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
+    { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'mysql'", specifier = ">=2.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'postgres'", specifier = ">=2.0" },
@@ -279,7 +281,7 @@ requires-dist = [
     { name = "starlette", marker = "extra == 'dev'", specifier = ">=0.48" },
     { name = "structlog", specifier = ">=24.0" },
 ]
-provides-extras = ["dev", "telemetry", "sqlite", "postgres", "mysql"]
+provides-extras = ["redis", "dev", "telemetry", "sqlite", "postgres", "mysql"]
 
 [[package]]
 name = "cryptography"

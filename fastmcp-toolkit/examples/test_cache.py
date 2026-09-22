@@ -14,6 +14,7 @@ from fastmcp import Client
 @pytest.mark.asyncio
 async def test_write_then_read_cache_roundtrip(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("fastmcp_toolkit.redis_lifespan.Redis", FakeRedis)
+    await FakeRedis.from_url("redis://localhost:6379/0").flushall()
 
     async with Client(app) as client:
         await client.call_tool("write_cache", {"key": "greeting", "value": "hello"})

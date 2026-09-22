@@ -20,7 +20,7 @@ def get_cache_repository(redis: Redis = CurrentRedisClient("cache")) -> CacheRep
     return RedisCacheRepository(redis)
 
 
-def CurrentCacheRepository() -> CacheRepository:  # noqa: N802
+def CurrentCacheRepository() -> CacheRepository:
     return cast(CacheRepository, Depends(get_cache_repository))
 
 
@@ -31,5 +31,5 @@ def get_cache_usecase(
     return CacheUsecaseImpl(repository)
 
 
-def CurrentCacheUsecase() -> CacheUsecase:  # noqa: N802
+def CurrentCacheUsecase() -> CacheUsecase:
     return cast(CacheUsecase, Depends(get_cache_usecase))

@@ -30,7 +30,9 @@ def redis_lifespan(name: str, url: str, **client_kwargs: Any) -> Lifespan:
     格納し、終了時にcloseする。``FastMCP(lifespan=redis_lifespan(name, url))``
     として使う。他のlifespanと ``|`` 演算子で合成できる。名前ごとに
     ``lifespan_context`` のキーを分けるため、複数のRedisクライアントを
-    同時に登録できる。
+    同時に登録できる。同じ``name``で複数回``redis_lifespan(...)``を登録した場合、
+    ``lifespan_context``のキーが衝突し、後から登録した方で静かに上書きされる。
+    同じ名前を重複登録しないこと。
 
     Args:
         name: このクライアントを識別する名前。``CurrentRedisClient`` で
@@ -68,7 +70,7 @@ def _get_redis_client(name: str) -> Callable[[Context], Redis]:
     return get_client
 
 
-def CurrentRedisClient(name: str) -> Redis:  # noqa: N802
+def CurrentRedisClient(name: str) -> Redis:
     """``redis_lifespan(name, ...)`` が生成したRedisクライアントを取得するDepends。
 
     ``fastmcp.server.dependencies.CurrentContext`` と同じ命名パターンで、
