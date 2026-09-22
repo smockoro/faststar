@@ -22,3 +22,6 @@ build/
 
 # Pytest
 .pytest_cache/
+
+# Git worktrees
+.worktrees/
