@@ -118,5 +118,5 @@ async def test_tool_raises_runtime_error_when_lifespan_not_registered():
         return type(engine).__name__
 
     async with Client(app) as client:
-        with pytest.raises(Exception, match="main"):
+        with pytest.raises(Exception, match="engine"):
             await client.call_tool("whoami", {})
