@@ -18,6 +18,15 @@ dependencies = [
 core-toolkit = { path = "../core-toolkit", editable = true }
 
 [project.optional-dependencies]
+sqlite = [
+  "core-toolkit[sqlite]",
+]
+postgres = [
+  "core-toolkit[postgres]",
+]
+mysql = [
+  "core-toolkit[mysql]",
+]
 dev = [
   "core-toolkit[telemetry]",
   "pytest>=8.0",
