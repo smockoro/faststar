@@ -20,8 +20,8 @@ from bff.cache.usecase import GetCachedValueUseCase, SetCachedValueUseCase
 # 生成してモジュール属性に固定する。テストの dependency_overrides はこの
 # オブジェクト（呼び出すたびに新しい関数が生成される get_redis_client 自体
 # ではない）をキーにする必要がある。
-_get_cache_redis_client = get_redis_client("cache")
-CacheRedisClient = Annotated[Redis, Depends(_get_cache_redis_client)]
+get_cache_redis_client = get_redis_client("cache")
+CacheRedisClient = Annotated[Redis, Depends(get_cache_redis_client)]
 
 
 def get_cache_repository(redis: CacheRedisClient) -> CacheRepository:
