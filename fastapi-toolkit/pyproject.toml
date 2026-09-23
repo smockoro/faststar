@@ -29,6 +29,10 @@ mysql = [
 redis = [
   "core-toolkit[redis]",
 ]
+msal = [
+  "core-toolkit[msal]",
+  "core-toolkit[redis]",
+]
 aiohttp = [
   "core-toolkit[aiohttp]",
 ]
