@@ -23,6 +23,10 @@ httpx = [
 redis = [
     "redis>=5.0",
 ]
+msal = [
+    "msal>=1.30",
+    "joserfc>=1.0",
+]
 dev = [
     "core-toolkit[telemetry]",
     "fakeredis>=2.20",
