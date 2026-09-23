@@ -26,6 +26,7 @@ redis = [
 msal = [
     "msal>=1.30",
     "joserfc>=1.0",
+    "redis>=5.0",
 ]
 dev = [
     "core-toolkit[telemetry]",

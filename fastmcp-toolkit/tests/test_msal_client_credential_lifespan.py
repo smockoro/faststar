@@ -4,7 +4,7 @@ import pytest
 from core_toolkit.token_cache_cipher import default_token_cache_cipher
 from fakeredis.aioredis import FakeRedis
 from fastmcp import Client, FastMCP
-from msal import ConfidentialClientApplication
+from msal import ConfidentialClientApplication, SerializableTokenCache
 
 from fastmcp_toolkit.msal_lifespan import (
     CurrentMsalAppToken,
@@ -140,6 +140,75 @@ async def test_repeated_calls_reuse_the_same_cache_instance(
     assert first.data == "token-1"
     assert second.data == "token-2"
     assert call_count["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_first_call_loads_existing_cache_from_redis(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """初回ツール呼び出し時にhandle.cache_loadedがFalseの分岐
+    (_get_msal_app_token内)で、Redisの暗号化済みキャッシュが実際に
+    ロード・復号されることを検証する(モジュールdocstring・Finding 5参照)。
+    起動時ロードではなく初回呼び出し時ロードのため、
+    test_msal_obo_lifespan.test_second_call_reuses_persisted_cache_from_redis
+    と同じ手法(deserialize呼び出しの追跡)に寄せている。
+    """
+    monkeypatch.setattr("fastmcp_toolkit.redis_lifespan.Redis", FakeRedis)
+    await FakeRedis.from_url("redis://localhost:6379/0").flushall()
+
+    cipher = default_token_cache_cipher(keys={"v1": _key(1)}, current_kid="v1")
+    seed_serialized = SerializableTokenCache().serialize()
+    seed_payload = cipher.encrypt(seed_serialized.encode())
+    seed_redis = FakeRedis.from_url("redis://localhost:6379/0")
+    await seed_redis.set("msal:app_cache:downstream-api", seed_payload)
+
+    deserialize_calls: list[str] = []
+    original_deserialize = SerializableTokenCache.deserialize
+
+    def tracking_deserialize(self, state: str) -> None:
+        deserialize_calls.append(state)
+        original_deserialize(self, state)
+
+    monkeypatch.setattr(SerializableTokenCache, "deserialize", tracking_deserialize)
+
+    loaded: dict[str, str] = {}
+
+    def fake_acquire(self, scopes):
+        # deserialize済みのキャッシュ内容をhandle.cache_loaded分岐の直後に
+        # 捕捉する。実トークン追加は模倣せず、ロードされた状態そのものを見る。
+        loaded["value"] = self.token_cache.serialize()
+        self.token_cache.has_state_changed = True
+        return {"access_token": "fake-token"}
+
+    monkeypatch.setattr(
+        ConfidentialClientApplication, "acquire_token_for_client", fake_acquire
+    )
+
+    app = _make_app(cipher)
+
+    @app.tool
+    async def call_downstream(
+        token: str = CurrentMsalAppToken(
+            "downstream-api", scopes=["api://xxx/.default"]
+        ),
+    ) -> str:
+        return token
+
+    async with Client(app) as client:
+        result = await client.call_tool("call_downstream", {})
+
+    assert result.data == "fake-token"
+    # Redisにseedしたキャッシュが実際にdeserializeされたことを確認する。
+    assert deserialize_calls == [seed_serialized]
+    assert loaded["value"] == seed_serialized
+
+    # has_state_changed=Trueのため、更新後のキャッシュが同じRedisキーへ
+    # 暗号化済みで書き戻されることも確認する。
+    written_redis = FakeRedis.from_url("redis://localhost:6379/0")
+    raw = await written_redis.get("msal:app_cache:downstream-api")
+    assert raw is not None
+    assert raw != seed_payload
+    assert cipher.decrypt(raw)  # 復号できる(=正しい鍵で暗号化されている)
 
 
 @pytest.mark.asyncio

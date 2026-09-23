@@ -12,7 +12,11 @@ from starlette.requests import Request
 
 from core_toolkit.lifespan import create_lifespan
 from core_toolkit.msal_errors import MsalClaimsChallengeError, MsalTokenError
-from core_toolkit.msal_lifespan import MsalOboLifespanResource, get_msal_obo_token
+from core_toolkit.msal_lifespan import (
+    MsalOboConfig,
+    MsalOboLifespanResource,
+    get_msal_obo_token,
+)
 from core_toolkit.redis_lifespan import RedisLifespanResource, get_redis_client
 from core_toolkit.token_cache_cipher import JweTokenCacheCipher
 
@@ -34,6 +38,22 @@ def _make_resource(cipher: JweTokenCacheCipher) -> MsalOboLifespanResource:
         redis_client_name="cache",
         cipher=cipher,
     )
+
+
+def test_msal_obo_config_repr_hides_client_credential():
+    config = MsalOboConfig(
+        client_id="client-id",
+        client_credential="super-secret",
+        authority="https://login.microsoftonline.com/tenant-id",
+        session=object(),
+        http_cache={},
+        executor=object(),
+        redis_client_name="cache",
+        cipher=object(),
+        cache_ttl=3600,
+    )
+
+    assert "super-secret" not in repr(config)
 
 
 @pytest.mark.asyncio

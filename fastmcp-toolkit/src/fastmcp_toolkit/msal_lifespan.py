@@ -16,7 +16,7 @@ FastMCPの``ComposedLifespan``は合成する各lifespan関数を``server``の�
 """
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -140,7 +140,9 @@ def msal_client_credential_lifespan(
     return _msal_client_credential_lifespan
 
 
-def _get_msal_app_token(name: str, scopes: list[str]) -> Callable[[Context], Any]:
+def _get_msal_app_token(
+    name: str, scopes: list[str]
+) -> Callable[[Context], Coroutine[Any, Any, str]]:
     async def get_token(ctx: Context = CurrentContext()) -> str:
         handle = ctx.lifespan_context.get(_lifespan_key(name))
         if handle is None:
@@ -201,7 +203,7 @@ def CurrentMsalAppToken(name: str, scopes: list[str]) -> str:  # noqa: N802
 @dataclass
 class MsalOboConfig:
     client_id: str
-    client_credential: str
+    client_credential: str = field(repr=False)
     authority: str
     session: Any
     http_cache: dict

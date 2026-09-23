@@ -19,6 +19,7 @@ redis = [
 msal = [
     "msal>=1.30",
     "joserfc>=1.0",
+    "redis>=5.0",
 ]
 aiohttp = [
     "aiohttp>=3.14.1",

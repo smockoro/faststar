@@ -5,6 +5,7 @@
 """
 
 import pytest
+import requests
 from fakeredis.aioredis import FakeRedis
 from msal import ConfidentialClientApplication, SerializableTokenCache
 from starlette.applications import Starlette
@@ -14,6 +15,7 @@ from core_toolkit.lifespan import create_lifespan
 from core_toolkit.msal_errors import MsalClaimsChallengeError, MsalTokenError
 from core_toolkit.msal_lifespan import (
     MsalClientCredentialLifespanResource,
+    _TimeoutSession,
     default_msal_http_session,
     get_msal_app_token,
 )
@@ -48,6 +50,43 @@ def test_default_msal_http_session_retries_on_429_and_5xx():
     assert adapter.max_retries.total == 3
     assert 429 in adapter.max_retries.status_forcelist
     assert 500 in adapter.max_retries.status_forcelist
+    # トークン取得は/oauth2/v2.0/tokenへのPOSTのため、allowed_methodsに
+    # POSTが含まれていないとリトライが一切効かない(urllib3のデフォルトは
+    # POSTを含まない)。
+    assert "POST" in adapter.max_retries.allowed_methods
+
+
+def test_default_msal_http_session_sets_default_timeout():
+    session = default_msal_http_session()
+
+    assert isinstance(session, _TimeoutSession)
+    assert session._timeout == 10.0
+
+
+def test_default_msal_http_session_sets_custom_timeout():
+    session = default_msal_http_session(timeout=5.0)
+
+    assert session._timeout == 5.0
+
+
+def test_default_msal_http_session_forces_timeout_on_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    session = default_msal_http_session(timeout=5.0)
+
+    captured: dict[str, object] = {}
+
+    def fake_request(self, *args, **kwargs):
+        captured.update(kwargs)
+        response = requests.Response()
+        response.status_code = 200
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+
+    session.get("https://login.microsoftonline.com")
+
+    assert captured["timeout"] == 5.0
 
 
 @pytest.mark.asyncio
