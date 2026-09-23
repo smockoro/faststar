@@ -202,3 +202,150 @@ def get_msal_app_token(name: str, scopes: list[str]):
 
     get_token.__name__ = f"get_msal_app_token_{name}"
     return get_token
+
+
+@dataclass
+class MsalOboConfig:
+    client_id: str
+    client_credential: str
+    authority: str
+    session: requests.Session
+    http_cache: dict
+    executor: ThreadPoolExecutor
+    redis_client_name: str
+    cipher: TokenCacheCipher
+    cache_ttl: int
+
+
+class MsalOboLifespanResource(LifespanResource):
+    """OBO用。ConfidentialClientApplicationインスタンス自体はリクエストごと
+    に生成するため、ここではSession/http_cache/executorのみをlifespanで
+    共有する。
+
+    ``token_cache``がインスタンス属性であり、OBOはリクエストごとに異なる
+    ユーザーのキャッシュを使う。共有インスタンスの``token_cache``を都度
+    差し替えると並行リクエスト間でキャッシュを取り違えるレースコンディション
+    になるため、``ConfidentialClientApplication``自体はリクエストごとに
+    ``get_msal_obo_token``側で生成する。
+
+    Args:
+        name: このコンフィグを識別する名前。``get_msal_obo_token``で
+            同じ名前を指定して取得する。
+        client_id: アプリ（クライアント）ID。
+        client_credential: クライアントシークレット文字列。
+        authority: 認証機関URL。
+        redis_client_name: トークンキャッシュ永続化に使うRedisクライアント名。
+        cipher: トークンキャッシュの暗号化実装。
+        max_workers: MSAL呼び出し専用ThreadPoolExecutorのワーカー数。
+        cache_ttl: Redisに保存するユーザー単位キャッシュのTTL（秒）。
+        http_client_factory: ``requests.Session``を生成するファクトリ。
+    """
+
+    def __init__(
+        self,
+        name: str,
+        client_id: str,
+        client_credential: str,
+        authority: str,
+        redis_client_name: str,
+        cipher: TokenCacheCipher,
+        max_workers: int = 4,
+        cache_ttl: int = 3600,
+        http_client_factory: Any = None,
+    ) -> None:
+        self._name = name
+        self._client_id = client_id
+        self._client_credential = client_credential
+        self._authority = authority
+        self._redis_client_name = redis_client_name
+        self._cipher = cipher
+        self._max_workers = max_workers
+        self._cache_ttl = cache_ttl
+        self._http_client_factory = http_client_factory or default_msal_http_session
+
+    @asynccontextmanager
+    async def context(self, app: Starlette):
+        session = self._http_client_factory()
+        executor = ThreadPoolExecutor(
+            max_workers=self._max_workers, thread_name_prefix=f"msal-obo-{self._name}"
+        )
+        config = MsalOboConfig(
+            client_id=self._client_id,
+            client_credential=self._client_credential,
+            authority=self._authority,
+            session=session,
+            http_cache={},
+            executor=executor,
+            redis_client_name=self._redis_client_name,
+            cipher=self._cipher,
+            cache_ttl=self._cache_ttl,
+        )
+        configs: dict[str, MsalOboConfig] = getattr(app.state, "msal_obo_configs", {})
+        app.state.msal_obo_configs = {**configs, self._name: config}
+
+        try:
+            yield config
+        finally:
+            executor.shutdown(wait=True)
+            session.close()
+
+
+def get_msal_obo_token(name: str, scopes: list[str]):
+    """名前を指定してOBOのアクセストークンを取得するprovider関数を生成する。
+
+    ``user_assertion``（呼び出し元ユーザーのアクセストークン文字列）と
+    ``user_id``（トークンキャッシュのキーに使うユーザー識別子）は、
+    アプリ側がJWTから取り出して渡す。
+
+    Args:
+        name: ``MsalOboLifespanResource(name=...)``に登録した名前。
+        scopes: 要求するスコープ。
+
+    Returns:
+        ``request: Request``・``user_assertion: str``・``user_id: str``を
+        引数に取る非同期provider関数。
+    """
+
+    async def get_token(request: Request, user_assertion: str, user_id: str) -> str:
+        configs: dict[str, MsalOboConfig] = getattr(
+            request.app.state, "msal_obo_configs", {}
+        )
+        if name not in configs:
+            raise RuntimeError(
+                f"msal_obo_configs['{name}'] is not set. "
+                f"Did you forget to register "
+                f"MsalOboLifespanResource(name='{name}', ...) "
+                "in create_lifespan(...)?"
+            )
+        config = configs[name]
+
+        redis = get_redis_client(config.redis_client_name)(request)
+        cache_key = f"msal:obo_cache:{name}:{user_id}"
+
+        cache = SerializableTokenCache()
+        raw = await redis.get(cache_key)
+        if raw:
+            cache.deserialize(config.cipher.decrypt(raw).decode())
+
+        def call_msal() -> dict[str, Any]:
+            client = ConfidentialClientApplication(
+                client_id=config.client_id,
+                client_credential=config.client_credential,
+                authority=config.authority,
+                token_cache=cache,
+                http_client=config.session,
+                http_cache=config.http_cache,
+            )
+            return client.acquire_token_on_behalf_of(user_assertion, scopes=scopes)
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(config.executor, call_msal)
+
+        if cache.has_state_changed:
+            payload = config.cipher.encrypt(cache.serialize().encode())
+            await redis.set(cache_key, payload, ex=config.cache_ttl)
+
+        _raise_for_result(result)
+        return result["access_token"]
+
+    return get_token
