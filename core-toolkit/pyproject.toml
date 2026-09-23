@@ -16,6 +16,9 @@ dependencies = [
 redis = [
     "redis>=5.0",
 ]
+msal = [
+    "joserfc>=1.0",
+]
 aiohttp = [
     "aiohttp>=3.14.1",
 ]
