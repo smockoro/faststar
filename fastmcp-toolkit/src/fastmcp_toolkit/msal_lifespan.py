@@ -196,3 +196,156 @@ def CurrentMsalAppToken(name: str, scopes: list[str]) -> str:  # noqa: N802
         str: ``Depends(...)``でラップされた、実行時に解決されるアクセストークン。
     """
     return cast(str, Depends(_get_msal_app_token(name, scopes)))
+
+
+@dataclass
+class MsalOboConfig:
+    client_id: str
+    client_credential: str
+    authority: str
+    session: Any
+    http_cache: dict
+    executor: ThreadPoolExecutor
+    redis_client_name: str
+    cipher: TokenCacheCipher
+    cache_ttl: int
+
+
+def _obo_lifespan_key(name: str) -> str:
+    return f"msal_obo_config:{name}"
+
+
+def msal_obo_lifespan(
+    name: str,
+    client_id: str,
+    client_credential: str,
+    authority: str,
+    redis_client_name: str,
+    cipher: TokenCacheCipher,
+    max_workers: int = 4,
+    cache_ttl: int = 3600,
+    http_client_factory: Any = None,
+) -> Lifespan:
+    """OBO用のSession/http_cache/executorのライフサイクルを管理するFastMCP
+    lifespanを生成する。
+
+    ``ConfidentialClientApplication``インスタンス自体はリクエストごとに
+    ``acquire_msal_obo_token``側で生成するため、ここではSession/http_cache/
+    executorのみを共有する（``token_cache``がユーザーごとに異なるため。
+    詳細はspecの「意思決定サマリー」参照）。``redis_lifespan(name=
+    redis_client_name, ...)``を同じ``FastMCP(lifespan=...)``に``|``で
+    合成しておく必要がある。
+
+    Args:
+        name: このコンフィグを識別する名前。``acquire_msal_obo_token``で
+            同じ名前を指定して取得する。
+        client_id: アプリ（クライアント）ID。
+        client_credential: クライアントシークレット文字列。
+        authority: 認証機関URL。
+        redis_client_name: トークンキャッシュ永続化に使うRedisクライアント名。
+        cipher: トークンキャッシュの暗号化実装。
+        max_workers: MSAL呼び出し専用ThreadPoolExecutorのワーカー数。
+        cache_ttl: Redisに保存するユーザー単位キャッシュのTTL（秒）。
+        http_client_factory: ``requests.Session``を生成するファクトリ。
+
+    Returns:
+        FastMCPの``lifespan=``にそのまま渡せる合成可能なLifespan。
+    """
+    factory = http_client_factory or default_msal_http_session
+
+    @lifespan
+    async def _msal_obo_lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
+        session = factory()
+        executor = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix=f"msal-obo-{name}"
+        )
+        config = MsalOboConfig(
+            client_id=client_id,
+            client_credential=client_credential,
+            authority=authority,
+            session=session,
+            http_cache={},
+            executor=executor,
+            redis_client_name=redis_client_name,
+            cipher=cipher,
+            cache_ttl=cache_ttl,
+        )
+        try:
+            yield {_obo_lifespan_key(name): config}
+        finally:
+            executor.shutdown(wait=True)
+            session.close()
+
+    return _msal_obo_lifespan
+
+
+async def acquire_msal_obo_token(
+    ctx: Context, name: str, scopes: list[str], user_assertion: str, user_id: str
+) -> str:
+    """OBOでアクセストークンを取得する。ツール関数内から明示的にawaitする。
+
+    ``user_assertion``（呼び出し元ユーザーのアクセストークン文字列）と
+    ``user_id``（トークンキャッシュのキーに使うユーザー識別子）は、アプリ側が
+    JWTから取り出して渡す。``user_assertion``/``user_id``という呼び出しごとに
+    変わる動的な値を必要とするため、``Depends``の静的解決パターンには乗せず、
+    通常の非同期関数として提供する。
+
+    Example::
+
+        @app.tool
+        async def call_downstream(
+            ctx: Context, user_assertion: str, user_id: str
+        ) -> str:
+            token = await acquire_msal_obo_token(
+                ctx, "graph", scopes=["User.Read"],
+                user_assertion=user_assertion, user_id=user_id,
+            )
+            ...
+
+    Args:
+        ctx: ツール関数が受け取った``Context``。
+        name: ``msal_obo_lifespan(name=...)``に登録した名前。
+        scopes: 要求するスコープ。
+        user_assertion: 呼び出し元ユーザーのアクセストークン文字列。
+        user_id: トークンキャッシュのキーに使うユーザー識別子。
+
+    Returns:
+        str: 取得したアクセストークン。
+    """
+    config = ctx.lifespan_context.get(_obo_lifespan_key(name))
+    if config is None:
+        raise RuntimeError(
+            f"lifespan_context['{_obo_lifespan_key(name)}'] is not set. "
+            f"Did you forget to pass lifespan=msal_obo_lifespan(name='{name}', ...) "
+            "to FastMCP(...)?"
+        )
+    config = cast(MsalOboConfig, config)
+
+    redis = _get_redis_client(config.redis_client_name)(ctx)
+    cache_key = f"msal:obo_cache:{name}:{user_id}"
+
+    cache = SerializableTokenCache()
+    raw = await redis.get(cache_key)
+    if raw:
+        cache.deserialize(config.cipher.decrypt(raw).decode())
+
+    def call_msal() -> dict[str, Any]:
+        client = ConfidentialClientApplication(
+            client_id=config.client_id,
+            client_credential=config.client_credential,
+            authority=config.authority,
+            token_cache=cache,
+            http_client=config.session,
+            http_cache=config.http_cache,
+        )
+        return client.acquire_token_on_behalf_of(user_assertion, scopes=scopes)
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(config.executor, call_msal)
+
+    if cache.has_state_changed:
+        payload = config.cipher.encrypt(cache.serialize().encode())
+        await redis.set(cache_key, payload, ex=config.cache_ttl)
+
+    _raise_for_result(result)
+    return result["access_token"]
