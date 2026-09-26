@@ -16,6 +16,9 @@ dependencies = [
 redis = [
     "redis>=5.0",
 ]
+valkey = [
+    "valkey-glide>=2.5.3",
+]
 msal = [
     "msal>=1.30",
     "joserfc>=1.0",
