@@ -29,6 +29,9 @@ mysql = [
 redis = [
   "core-toolkit[redis]",
 ]
+valkey = [
+  "core-toolkit[valkey]",
+]
 msal = [
   "core-toolkit[msal]",
   "core-toolkit[redis]",
