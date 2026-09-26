@@ -1,7 +1,7 @@
 """valkey_lifespanの統合テスト。"""
 
 import pytest
-from glide import GlideClient
+from glide import GlideClient, GlideClientConfiguration
 from starlette.applications import Starlette
 from starlette.requests import Request
 
@@ -103,3 +103,32 @@ async def test_valkey_lifespan_resource_closes_client_on_exit(
         pass
 
     assert created[0].closed
+
+
+@pytest.mark.asyncio
+async def test_valkey_lifespan_resource_builds_config_from_host_port(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured_configs: list[GlideClientConfiguration] = []
+
+    async def fake_create(config):
+        captured_configs.append(config)
+        return FakeGlideClient()
+
+    monkeypatch.setattr(GlideClient, "create", fake_create)
+    app = Starlette()
+    lifespan = create_lifespan(
+        ValkeyLifespanResource(
+            "cache", "example.invalid", 6380, use_tls=True, database_id=2
+        )
+    )
+
+    async with lifespan(app):
+        pass
+
+    config = captured_configs[0]
+    assert len(config.addresses) == 1
+    assert config.addresses[0].host == "example.invalid"
+    assert config.addresses[0].port == 6380
+    assert config.use_tls is True
+    assert config.database_id == 2

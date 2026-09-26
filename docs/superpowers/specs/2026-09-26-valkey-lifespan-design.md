@@ -299,7 +299,7 @@ valkey = ["valkey-glide>=1.3"]
 ```
 
 - core-toolkit/fastapi-toolkit/fastmcp-toolkitの3パッケージすべてに`valkey`extraを追加する
-- fastapi-toolkit/fastmcp-toolkitは`core-toolkit[valkey]`を`valkey`extra経由で引く（DB/Redis接続部品と同じ依存の通し方）
+- fastapi-toolkitは`core-toolkit[valkey]`を`valkey`extra経由で引く（DB/Redis接続部品と同じ依存の通し方）。fastmcp-toolkitはcore-toolkitのコードを一切importしない独立実装のため、`valkey-glide`を直接依存として追加する（既存の`redis`extraと同じ扱い）
 - バージョン下限は実装時に`uv add`で解決し直す
 
 ## 未決事項・将来検討（本設計のスコープ外）

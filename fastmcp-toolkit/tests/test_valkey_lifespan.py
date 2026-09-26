@@ -7,7 +7,7 @@ entryするため、ツール関数からCurrentValkeyClient(name)がDepends経�
 
 import pytest
 from fastmcp import Client, FastMCP
-from glide import GlideClient
+from glide import GlideClient, GlideClientConfiguration
 
 from fastmcp_toolkit.valkey_lifespan import CurrentValkeyClient, valkey_lifespan
 
@@ -107,3 +107,37 @@ def test_get_valkey_client_error_message_includes_registration_hint():
     get_client = _get_valkey_client("cache")
     with pytest.raises(RuntimeError, match="cache"):
         get_client(SimpleNamespace(lifespan_context={}))
+
+
+@pytest.mark.asyncio
+async def test_valkey_lifespan_builds_config_from_host_port(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured_configs: list[GlideClientConfiguration] = []
+
+    async def fake_create(config):
+        captured_configs.append(config)
+        return FakeGlideClient()
+
+    monkeypatch.setattr(GlideClient, "create", fake_create)
+
+    app = FastMCP(
+        "test",
+        lifespan=valkey_lifespan(
+            "cache", "example.invalid", 6380, use_tls=True, database_id=2
+        ),
+    )
+
+    @app.tool
+    async def noop() -> str:
+        return "ok"
+
+    async with Client(app) as client:
+        await client.call_tool("noop", {})
+
+    config = captured_configs[0]
+    assert len(config.addresses) == 1
+    assert config.addresses[0].host == "example.invalid"
+    assert config.addresses[0].port == 6380
+    assert config.use_tls is True
+    assert config.database_id == 2
