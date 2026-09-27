@@ -1,5 +1,9 @@
 """ErrorCodeRegistryのテスト。"""
 
+import dataclasses
+
+import pytest
+
 from core_toolkit.error_mapping import ErrorCodeMapping, ErrorCodeRegistry
 from core_toolkit.errors import BusinessProblem, SystemProblem
 
@@ -33,3 +37,10 @@ class TestErrorCodeRegistry:
         registry = ErrorCodeRegistry(None)
         exc = BusinessProblem("business.anything", "何か")
         assert registry.resolve_http_status(exc) == 400
+
+
+class TestErrorCodeMapping:
+    def test_mapping_is_immutable(self):
+        mapping = ErrorCodeMapping(http_status=404)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            mapping.http_status = 500  # type: ignore[misc]

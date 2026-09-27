@@ -7,7 +7,7 @@ from core_toolkit.errors import ApplicationProblem, SystemProblem
 __all__ = ["ErrorCodeMapping", "ErrorCodeRegistry"]
 
 
-@dataclass
+@dataclass(frozen=True)
 class ErrorCodeMapping:
     """1つの``error_code``に対応するプロトコル固有値。
 
