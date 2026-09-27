@@ -26,6 +26,15 @@ redis = [
 valkey = [
     "valkey-glide>=2.5.3",
 ]
+s3 = [
+    "core-toolkit[s3]",
+]
+gcs = [
+    "core-toolkit[gcs]",
+]
+azure = [
+    "core-toolkit[azure]",
+]
 msal = [
     "msal>=1.30",
     "joserfc>=1.0",
