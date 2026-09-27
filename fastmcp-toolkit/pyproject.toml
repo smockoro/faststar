@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "core-toolkit",
-    "fastmcp>=2.0",
+    "fastmcp>=3.4.0",
     "structlog>=24.0",
 ]
 
