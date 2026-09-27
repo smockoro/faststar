@@ -24,15 +24,26 @@ __all__ = [
 ]
 
 
+# SystemProblemのmessageはホスト名・SQL・内部ID等を含みうるため、
+# クライアントには返さず固定文言に置き換える（原文はログにのみ残す）。
+# StarletteのServerErrorMiddlewareの既定500応答（"Internal Server Error"）
+# に揃えて英語の固定文言とする。
+_SYSTEM_PROBLEM_DETAIL = "Internal server error"
+
+
 def _build_problem_response(exc: ApplicationProblem, registry: ErrorCodeRegistry) -> JSONResponse:
     status = registry.resolve_http_status(exc)
+    # マスク判定はHTTPステータス（マッピングで500以上に解決されたか）では
+    # なく例外の型で行う。BusinessProblemを5xxにマッピングしても、その
+    # messageは呼び出し側に向けた意図的な文言なのでそのまま返す。
+    detail = _SYSTEM_PROBLEM_DETAIL if isinstance(exc, SystemProblem) else exc.message
     return JSONResponse(
         status_code=status,
         content={
             "type": "about:blank",
             "title": exc.error_code,
             "status": status,
-            "detail": exc.message,
+            "detail": detail,
         },
         media_type="application/problem+json",
     )
@@ -55,9 +66,30 @@ async def handle_application_error(request: Request, exc: Exception) -> JSONResp
             ``ApplicationProblem``で登録する限り実際にはサブクラスのみが渡る。
 
     Returns:
-        RFC 7807形式の``JSONResponse``。
+        RFC 7807形式の``JSONResponse``。``SystemProblem``の場合、``detail``は
+        内部情報の漏洩を防ぐため固定文言に置き換えられる（``title``の
+        ``error_code``はそのまま返す）。
+
+    Raises:
+        TypeError: ``exc``が``ApplicationProblem``ではない場合
+            （``exception_handlers``への登録キーの誤り等）。
+
+    Note:
+        ``ErrorMappingLifespanResource``（``open_error_mapping()``）を
+        ``create_lifespan(...)``に登録し忘れると、このハンドラ内の
+        ``get_error_mapping_resource``が``RuntimeError``を送出し、
+        ``BusinessProblem``を含む**全ての**``ApplicationProblem``が
+        StarletteのServerErrorMiddleware経由で素の500として返る。この
+        設定漏れは起動時には検出されず、実際に例外が発生して初めて
+        顕在化する。独自マッピングが不要な場合でも、空マッピング
+        （``open_error_mapping()``を引数なし）で必ず登録すること。
     """
-    assert isinstance(exc, ApplicationProblem)
+    if not isinstance(exc, ApplicationProblem):
+        raise TypeError(
+            "handle_application_error expects an ApplicationProblem instance, "
+            f"got {type(exc).__name__}. Register it as "
+            "exception_handlers={ApplicationProblem: handle_application_error}."
+        )
     resource = get_error_mapping_resource(request.app)
     return _build_problem_response(exc, resource.registry)
 
@@ -73,6 +105,19 @@ class ErrorHandlingMiddleware:
     Starletteは最後に``add_middleware``したものが一番外側になるため、
     このミドルウェアは他の全ての``app.add_middleware(...)``呼び出しの
     **後**に登録する必要がある。
+
+    ``SystemProblem``の``message``は内部情報の漏洩を防ぐため``detail``に
+    出さず固定文言に置き換える（``handle_application_error``と同じ）。
+
+    Note:
+        ``ErrorMappingLifespanResource``（``open_error_mapping()``）を
+        ``create_lifespan(...)``に登録し忘れると、このミドルウェア内の
+        ``get_error_mapping_resource``が``RuntimeError``を送出し、
+        ``BusinessProblem``を含む**全ての**``ApplicationProblem``が
+        StarletteのServerErrorMiddleware経由で素の500として返る。この
+        設定漏れは起動時には検出されず、実際に例外が発生して初めて
+        顕在化する。独自マッピングが不要な場合でも、空マッピング
+        （``open_error_mapping()``を引数なし）で必ず登録すること。
 
     Args:
         app: ラップ対象のASGIアプリケーション。
