@@ -32,6 +32,15 @@ redis = [
 valkey = [
   "core-toolkit[valkey]",
 ]
+s3 = [
+  "core-toolkit[s3]",
+]
+gcs = [
+  "core-toolkit[gcs]",
+]
+azure = [
+  "core-toolkit[azure]",
+]
 msal = [
   "core-toolkit[msal]",
   "core-toolkit[redis]",
