@@ -52,6 +52,10 @@ mysql = [
     "sqlalchemy[asyncio]>=2.0",
     "asyncmy>=0.2",
 ]
+s3 = [
+    "aiobotocore>=3.0",
+    "botocore",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/core_toolkit"]
