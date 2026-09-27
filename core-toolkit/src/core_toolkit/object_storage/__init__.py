@@ -11,6 +11,7 @@ from core_toolkit.object_storage.base import (
     PermissionDeniedError,
     UnknownBucketError,
 )
+from core_toolkit.object_storage.factory import open_object_storage
 from core_toolkit.object_storage.memory import InMemoryObjectStorage
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "ObjectStorageError",
     "PermissionDeniedError",
     "UnknownBucketError",
+    "open_object_storage",
 ]
