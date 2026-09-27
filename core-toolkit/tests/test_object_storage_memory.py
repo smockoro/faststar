@@ -59,3 +59,14 @@ async def test_two_instances_do_not_share_data():
     await a.put("uploads", "x.txt", b"only in a")
 
     assert await b.exists("uploads", "x.txt") is False
+
+
+@pytest.mark.asyncio
+async def test_multipart_complete_without_parts_does_not_create_empty_object():
+    storage = InMemoryObjectStorage({"uploads": "uploads-x7f3"})
+    upload = await storage.begin_multipart("uploads", "a.bin")
+
+    with pytest.raises(ObjectStorageError, match="no parts"):
+        await upload.complete()
+
+    assert await storage.exists("uploads", "a.bin") is False

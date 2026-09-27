@@ -11,6 +11,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import structlog
+
+_logger = structlog.get_logger(__name__)
+
 DEFAULT_MULTIPART_THRESHOLD = 8 * 1024 * 1024  # 8 MiB
 DEFAULT_PART_SIZE = 8 * 1024 * 1024  # 8 MiB
 MIN_PART_SIZE = 5 * 1024 * 1024  # 5 MiB（S3の制約。最後のパート以外はこれ以上必要）
@@ -33,7 +37,12 @@ class UnknownBucketError(ObjectStorageError):
 
 
 class BucketNotFoundError(ObjectStorageError):
-    """物理バケットが存在しない場合に送出する（設定ミスの検知用）。"""
+    """物理バケットが存在しない場合に送出する（設定ミスの検知用）。
+
+    バックエンドのSDK/APIがバケット不在とオブジェクト不在を区別できる場合に
+    のみ送出する。区別できない場合（例: S3の``HeadObject``はボディの無い
+    404を返す）は``ObjectNotFoundError``になる。
+    """
 
 
 class ObjectNotFoundError(ObjectStorageError):
@@ -72,20 +81,48 @@ class MultipartUpload(abc.ABC):
     async def upload_part(self, part_number: int, data: bytes) -> None:
         """1パート分のデータを送信する。
 
+        同じ``part_number``で再度呼ぶと、そのパートの内容を置き換える。
+        パートは送信順ではなく``part_number``の昇順で結合される。
+
         Args:
-            part_number: 1始まりのパート番号（最大``MAX_PART_NUMBER``）。
-            data: パートのバイト列。最後のパート以外は``MIN_PART_SIZE``以上
-                である必要がある（バックエンドによっては実際の強制は
-                サーバー側で行われる）。
+            part_number: 1始まりのパート番号（1〜``MAX_PART_NUMBER``）。
+            data: パートのバイト列。最後のパート以外は各バックエンドの実務的な
+                最小サイズ（S3では``MIN_PART_SIZE``=5 MiB）以上にすること。
+                強制タイミングはバックエンドにより異なり、S3はサーバー側で
+                ``complete()``時に拒否する。
+
+        Raises:
+            ObjectStorageError: 送信に失敗した場合（権限不足なら
+                ``PermissionDeniedError``）。
         """
 
     @abc.abstractmethod
     async def complete(self) -> ObjectInfo:
-        """送信済みの全パートを結合し、アップロードを完了する。"""
+        """送信済みの全パートを``part_number``昇順で結合し、アップロードを完了する。
+
+        完了するまで対象キーには何も書き込まれず（既存オブジェクトも
+        置き換わらない）、完了した時点で``begin_multipart``に渡した
+        ``content_type``/``metadata``付きのオブジェクトとして確定する。
+
+        Returns:
+            確定したオブジェクトのメタ情報。
+
+        Raises:
+            ObjectStorageError: パートが1つも送信されていない場合、パートの
+                サイズ制約に違反した場合、またはバックエンドでの結合に失敗した
+                場合。失敗した場合も``abort()``で後始末できる状態を保つ。
+        """
 
     @abc.abstractmethod
     async def abort(self) -> None:
-        """アップロードを中止し、送信済みパートを破棄する。"""
+        """アップロードを中止し、送信済みパートを破棄する。
+
+        対象キーには何も書き込まない。後始末対象が既に存在しない場合も
+        例外を送出しない。
+
+        Raises:
+            ObjectStorageError: バックエンドでの破棄処理に失敗した場合。
+        """
 
     async def __aenter__(self) -> MultipartUpload:
         return self
@@ -93,7 +130,12 @@ class MultipartUpload(abc.ABC):
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
         if exc_type is None:
             return
-        await self.abort()
+        try:
+            await self.abort()
+        except Exception:
+            # abort()の失敗で元の例外（アップロード失敗の本当の原因）を
+            # 覆い隠さないよう、ログに残すだけにして元の例外を優先する。
+            _logger.warning("multipart_abort_failed", exc_info=True)
 
 
 class ObjectStorage(abc.ABC):
@@ -123,29 +165,146 @@ class ObjectStorage(abc.ABC):
         *,
         content_type: str | None = None,
         metadata: Mapping[str, str] | None = None,
-    ) -> ObjectInfo: ...
+    ) -> ObjectInfo:
+        """オブジェクトを1回のリクエストで書き込む（既存なら上書きする）。
+
+        Args:
+            bucket: 論理バケット名（物理名ではない）。
+            key: オブジェクトキー。
+            data: 書き込むバイト列。
+            content_type: オブジェクトのContent-Type。
+            metadata: ユーザー定義メタデータ。
+
+        Returns:
+            書き込んだオブジェクトのメタ情報。
+
+        Raises:
+            UnknownBucketError: ``bucket``が登録されていない場合。
+            BucketNotFoundError: 物理バケットが存在しない場合（判定可能な
+                バックエンドのみ）。
+            PermissionDeniedError: 権限不足の場合。
+            ObjectStorageError: その他の失敗。
+        """
 
     @abc.abstractmethod
-    async def get(self, bucket: str, key: str) -> bytes: ...
+    async def get(self, bucket: str, key: str) -> bytes:
+        """オブジェクト全体をメモリに読み込んで返す。
+
+        Args:
+            bucket: 論理バケット名。
+            key: オブジェクトキー。
+
+        Returns:
+            オブジェクトの内容。
+
+        Raises:
+            ObjectNotFoundError: オブジェクトが存在しない場合。
+            UnknownBucketError: ``bucket``が登録されていない場合。
+            ObjectStorageError: その他の失敗。
+        """
 
     @abc.abstractmethod
     def get_stream(
         self, bucket: str, key: str, *, chunk_size: int = 64 * 1024
-    ) -> AsyncIterator[bytes]: ...
+    ) -> AsyncIterator[bytes]:
+        """オブジェクトの内容をチャンク単位で返す非同期イテレータを返す。
+
+        非同期ジェネレータとして実装されるため、``ObjectNotFoundError``等の
+        例外は呼び出し時ではなく最初の反復時（``async for``開始時）に送出される
+        ことがある。
+
+        Args:
+            bucket: 論理バケット名。
+            key: オブジェクトキー。
+            chunk_size: 1チャンクの目安のバイト数（バックエンドにより実際の
+                チャンクサイズは異なりうる）。
+
+        Returns:
+            オブジェクトの内容を先頭から順に返す非同期イテレータ。
+
+        Raises:
+            ObjectNotFoundError: オブジェクトが存在しない場合。
+            UnknownBucketError: ``bucket``が登録されていない場合。
+            ObjectStorageError: その他の失敗。
+        """
 
     @abc.abstractmethod
-    async def head(self, bucket: str, key: str) -> ObjectInfo: ...
+    async def head(self, bucket: str, key: str) -> ObjectInfo:
+        """オブジェクトの内容を読まずにメタ情報のみ取得する。
+
+        Args:
+            bucket: 論理バケット名。
+            key: オブジェクトキー。
+
+        Returns:
+            オブジェクトのメタ情報。
+
+        Raises:
+            ObjectNotFoundError: オブジェクトが存在しない場合。
+            UnknownBucketError: ``bucket``が登録されていない場合。
+            ObjectStorageError: その他の失敗。
+        """
 
     @abc.abstractmethod
-    async def delete(self, bucket: str, key: str) -> None: ...
+    async def delete(self, bucket: str, key: str) -> None:
+        """オブジェクトを削除する。冪等であり、存在しなくても成功する。
+
+        Args:
+            bucket: 論理バケット名。
+            key: オブジェクトキー。
+
+        Raises:
+            UnknownBucketError: ``bucket``が登録されていない場合。
+            BucketNotFoundError: 物理バケットが存在しない場合（判定可能な
+                バックエンドのみ。オブジェクト不在とは区別して冪等化しない）。
+            PermissionDeniedError: 権限不足の場合。
+            ObjectStorageError: その他の失敗。
+        """
 
     @abc.abstractmethod
-    def list(self, bucket: str, prefix: str = "") -> AsyncIterator[ObjectInfo]: ...
+    def list(self, bucket: str, prefix: str = "") -> AsyncIterator[ObjectInfo]:
+        """``prefix``で始まるキーのオブジェクトを列挙する非同期イテレータを返す。
+
+        ページングはアダプタ内部で処理する。列挙順は保証しない。
+        非同期ジェネレータとして実装されるため、例外は呼び出し時ではなく
+        最初の反復時に送出されることがある。バックエンドによっては
+        ``content_type``/``metadata``が埋まらない（S3の``ListObjectsV2``は
+        返さない）ため、必要なら``head``で取得すること。
+
+        Args:
+            bucket: 論理バケット名。
+            prefix: キーの前方一致条件。空文字列なら全件。
+
+        Returns:
+            ``ObjectInfo``を返す非同期イテレータ。
+
+        Raises:
+            UnknownBucketError: ``bucket``が登録されていない場合。
+            BucketNotFoundError: 物理バケットが存在しない場合（判定可能な
+                バックエンドのみ）。
+            ObjectStorageError: その他の失敗。
+        """
 
     @abc.abstractmethod
     async def presigned_download_url(
         self, bucket: str, key: str, *, expires: timedelta
-    ) -> str: ...
+    ) -> str:
+        """オブジェクトをダウンロード（GET）するための署名付きURLを生成する。
+
+        Args:
+            bucket: 論理バケット名。
+            key: オブジェクトキー。
+            expires: URLの有効期間。上限はバックエンドにより異なる
+                （S3/GCSのV4署名は最大7日）。
+
+        Returns:
+            署名付きURL。
+
+        Raises:
+            NotSupportedError: バックエンドが署名付きURLに対応していない、
+                または必要な認証情報が無い場合。
+            ObjectStorageError: 有効期間が上限を超える等、生成に失敗した場合。
+        """
 
     @abc.abstractmethod
     async def presigned_upload_url(
@@ -155,7 +314,25 @@ class ObjectStorage(abc.ABC):
         *,
         expires: timedelta,
         content_type: str | None = None,
-    ) -> str: ...
+    ) -> str:
+        """オブジェクトをアップロード（PUT）するための署名付きURLを生成する。
+
+        Args:
+            bucket: 論理バケット名。
+            key: オブジェクトキー。
+            expires: URLの有効期間。上限はバックエンドにより異なる。
+            content_type: 指定すると、アップロード時のContent-Typeを署名に
+                含めて強制する（対応するバックエンドのみ。Azureは署名に
+                反映できない）。
+
+        Returns:
+            署名付きURL。
+
+        Raises:
+            NotSupportedError: バックエンドが署名付きURLに対応していない、
+                または必要な認証情報が無い場合。
+            ObjectStorageError: 有効期間が上限を超える等、生成に失敗した場合。
+        """
 
     @abc.abstractmethod
     async def begin_multipart(
@@ -165,7 +342,34 @@ class ObjectStorage(abc.ABC):
         *,
         content_type: str | None = None,
         metadata: Mapping[str, str] | None = None,
-    ) -> MultipartUpload: ...
+    ) -> MultipartUpload:
+        """マルチパートアップロードのセッションを開始する。
+
+        返り値の``MultipartUpload``に対して``upload_part``を1回以上呼び、
+        ``complete()``で確定する。パート番号は1〜``MAX_PART_NUMBER``で、
+        最後のパート以外は各バックエンドの実務的な最小サイズ（S3では
+        ``MIN_PART_SIZE``=5 MiB）以上にすること。``async with``で使うと、
+        ``complete()``せずに例外でブロックを抜けた場合に自動で``abort()``する。
+        同じキーに対して複数セッションを並行実行しても、セッション間で
+        パートが混ざることは無い（S3/GCS/InMemoryでは最後に``complete()``
+        したものが残る）。ただしAzureでは、あるセッションの``complete()``や
+        同じキーへの``put``がそのキーの他セッションの送信済みパートを破棄する
+        ため、後から``complete()``したセッションは``ObjectStorageError``で
+        失敗しうる。
+
+        Args:
+            bucket: 論理バケット名。
+            key: 最終的に書き込むオブジェクトキー。
+            content_type: 完成したオブジェクトのContent-Type。
+            metadata: 完成したオブジェクトのユーザー定義メタデータ。
+
+        Returns:
+            マルチパートアップロードのセッション。
+
+        Raises:
+            UnknownBucketError: ``bucket``が登録されていない場合。
+            ObjectStorageError: セッション開始に失敗した場合。
+        """
 
     # --- 便利メソッド（基本操作の組み合わせのみ） ---
 

@@ -9,9 +9,10 @@ aiobotocoreの実クライアントはネットワークI/Oを要するため、
 from datetime import timedelta
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, NoCredentialsError
 
 from core_toolkit.object_storage.base import (
+    BucketNotFoundError,
     ObjectNotFoundError,
     ObjectStorageError,
     PermissionDeniedError,
@@ -209,3 +210,136 @@ async def test_presigned_download_url_uses_physical_bucket_name():
     )
     assert "uploads-x7f3" in url
     assert "a.txt" in url
+
+
+# --- I4: BucketNotFoundError ---
+
+
+class _MissingBucketClient(FakeS3Client):
+    """物理バケットが存在しない状態を模す。"""
+
+    async def put_object(self, **_kwargs):
+        raise _client_error("NoSuchBucket", "PutObject")
+
+    async def get_object(self, **_kwargs):
+        raise _client_error("NoSuchBucket", "GetObject")
+
+    async def head_object(self, **_kwargs):
+        # HeadObjectはボディの無い404を返すため、キー不在と区別できない
+        raise _client_error("404", "HeadObject")
+
+    async def delete_object(self, **_kwargs):
+        raise _client_error("NoSuchBucket", "DeleteObject")
+
+    async def create_multipart_upload(self, **_kwargs):
+        raise _client_error("NoSuchBucket", "CreateMultipartUpload")
+
+    def get_paginator(self, operation_name: str):
+        class _Paginator:
+            def paginate(self, **_kwargs):
+                async def _pages():
+                    raise _client_error("NoSuchBucket", "ListObjectsV2")
+                    yield  # pragma: no cover - 非同期ジェネレータにするため
+
+                return _pages()
+
+        return _Paginator()
+
+
+@pytest.mark.asyncio
+async def test_no_such_bucket_raises_bucket_not_found():
+    storage = S3ObjectStorage({"uploads": "uploads-x7f3"}, _MissingBucketClient())
+    with pytest.raises(BucketNotFoundError):
+        await storage.put("uploads", "a.txt", b"a")
+    with pytest.raises(BucketNotFoundError):
+        await storage.get("uploads", "a.txt")
+    with pytest.raises(BucketNotFoundError):
+        await storage.begin_multipart("uploads", "a.bin")
+
+
+@pytest.mark.asyncio
+async def test_head_on_missing_bucket_is_indistinguishable_from_missing_key():
+    storage = S3ObjectStorage({"uploads": "uploads-x7f3"}, _MissingBucketClient())
+    with pytest.raises(ObjectNotFoundError):
+        await storage.head("uploads", "a.txt")
+
+
+@pytest.mark.asyncio
+async def test_delete_on_missing_bucket_raises_bucket_not_found():
+    storage = S3ObjectStorage({"uploads": "uploads-x7f3"}, _MissingBucketClient())
+    with pytest.raises(BucketNotFoundError):
+        await storage.delete("uploads", "a.txt")
+
+
+@pytest.mark.asyncio
+async def test_list_on_missing_bucket_raises_bucket_not_found():
+    storage = S3ObjectStorage({"uploads": "uploads-x7f3"}, _MissingBucketClient())
+    with pytest.raises(BucketNotFoundError):
+        async for _ in storage.list("uploads"):
+            pass
+
+
+# --- I5: 例外の正規化 ---
+
+
+@pytest.mark.asyncio
+async def test_list_wraps_generic_client_error():
+    class FailingListClient(FakeS3Client):
+        def get_paginator(self, operation_name: str):
+            class _Paginator:
+                def paginate(self, **_kwargs):
+                    async def _pages():
+                        raise _client_error("InternalError", "ListObjectsV2")
+                        yield  # pragma: no cover
+
+                    return _pages()
+
+            return _Paginator()
+
+    storage = S3ObjectStorage({"uploads": "uploads-x7f3"}, FailingListClient())
+    with pytest.raises(ObjectStorageError) as exc_info:
+        async for _ in storage.list("uploads"):
+            pass
+    assert isinstance(exc_info.value.__cause__, ClientError)
+
+
+@pytest.mark.asyncio
+async def test_presigned_urls_normalize_botocore_errors():
+    class NoCredentialsClient(FakeS3Client):
+        async def generate_presigned_url(self, client_method, **_kwargs):
+            raise NoCredentialsError()
+
+    storage = S3ObjectStorage({"uploads": "uploads-x7f3"}, NoCredentialsClient())
+    with pytest.raises(ObjectStorageError):
+        await storage.presigned_download_url(
+            "uploads", "a.txt", expires=timedelta(minutes=5)
+        )
+    with pytest.raises(ObjectStorageError):
+        await storage.presigned_upload_url(
+            "uploads", "a.txt", expires=timedelta(minutes=5)
+        )
+
+
+@pytest.mark.asyncio
+async def test_presigned_urls_normalize_client_errors():
+    class DeniedClient(FakeS3Client):
+        async def generate_presigned_url(self, client_method, **_kwargs):
+            raise _client_error("AccessDenied", "GeneratePresignedUrl")
+
+    storage = S3ObjectStorage({"uploads": "uploads-x7f3"}, DeniedClient())
+    with pytest.raises(PermissionDeniedError):
+        await storage.presigned_download_url(
+            "uploads", "a.txt", expires=timedelta(minutes=5)
+        )
+
+
+@pytest.mark.asyncio
+async def test_abort_ignores_no_such_upload():
+    class GoneUploadClient(FakeS3Client):
+        async def abort_multipart_upload(self, **_kwargs):
+            raise _client_error("NoSuchUpload", "AbortMultipartUpload")
+
+    storage = S3ObjectStorage({"uploads": "uploads-x7f3"}, GoneUploadClient())
+    upload = await storage.begin_multipart("uploads", "a.bin")
+
+    await upload.abort()  # 例外を出さない

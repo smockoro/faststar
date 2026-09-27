@@ -8,7 +8,13 @@
 
 from pathlib import Path
 
-from core_toolkit.object_storage.base import ObjectNotFoundError, ObjectStorage
+import pytest
+
+from core_toolkit.object_storage.base import (
+    ObjectNotFoundError,
+    ObjectStorage,
+    ObjectStorageError,
+)
 
 
 class ObjectStorageContract:
@@ -23,8 +29,6 @@ class ObjectStorageContract:
     async def test_get_missing_raises_object_not_found(
         self, storage: ObjectStorage, logical_bucket: str
     ):
-        import pytest
-
         with pytest.raises(ObjectNotFoundError):
             await storage.get(logical_bucket, "missing.txt")
 
@@ -81,6 +85,46 @@ class ObjectStorageContract:
 
         assert info.size == 7
         assert await storage.get(logical_bucket, "multi.bin") == b"aaaaabb"
+
+    async def test_multipart_upload_preserves_content_type_and_metadata(
+        self, storage: ObjectStorage, logical_bucket: str
+    ):
+        upload = await storage.begin_multipart(
+            logical_bucket,
+            "meta.bin",
+            content_type="application/x-test",
+            metadata={"owner": "alice"},
+        )
+        await upload.upload_part(1, b"aaaaa")
+        await upload.upload_part(2, b"bb")
+
+        info = await upload.complete()
+        head = await storage.head(logical_bucket, "meta.bin")
+
+        for got in (info, head):
+            assert got.content_type == "application/x-test"
+            assert dict(got.metadata) == {"owner": "alice"}
+
+    async def test_multipart_complete_without_parts_raises(
+        self, storage: ObjectStorage, logical_bucket: str
+    ):
+        upload = await storage.begin_multipart(logical_bucket, "empty.bin")
+
+        with pytest.raises(ObjectStorageError, match="no parts"):
+            await upload.complete()
+
+        assert await storage.exists(logical_bucket, "empty.bin") is False
+
+    async def test_list_does_not_expose_in_progress_multipart_parts(
+        self, storage: ObjectStorage, logical_bucket: str
+    ):
+        upload = await storage.begin_multipart(logical_bucket, "pending.bin")
+        await upload.upload_part(1, b"aaaaa")
+
+        keys = [info.key async for info in storage.list(logical_bucket)]
+
+        assert keys == []
+        await upload.abort()
 
     async def test_multipart_upload_abort_discards_parts(
         self, storage: ObjectStorage, logical_bucket: str

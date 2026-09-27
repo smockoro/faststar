@@ -5,11 +5,12 @@
 
 from collections.abc import AsyncIterator, Mapping
 from datetime import timedelta
-from typing import Any
+from typing import Any, NoReturn
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from core_toolkit.object_storage.base import (
+    BucketNotFoundError,
     MultipartUpload,
     ObjectInfo,
     ObjectNotFoundError,
@@ -18,18 +19,44 @@ from core_toolkit.object_storage.base import (
     PermissionDeniedError,
 )
 
+_BUCKET_NOT_FOUND_CODES = {"NoSuchBucket"}
 _NOT_FOUND_CODES = {"404", "NoSuchKey", "NotFound"}
 _PERMISSION_DENIED_CODES = {"403", "AccessDenied"}
 
 
-def _raise_for_client_error(error: ClientError, *, bucket: str, key: str) -> None:
+def _raise_for_client_error(error: ClientError, *, bucket: str, key: str) -> NoReturn:
+    """``ClientError``をObjectStorageの例外階層へ正規化して送出する。
+
+    ``NoSuchBucket``は``BucketNotFoundError``にする。ただし``HeadObject``は
+    ボディの無い404を返すため、バケット不在とキー不在を区別できず
+    ``ObjectNotFoundError``になる。
+    """
     code = error.response.get("Error", {}).get("Code", "")
+    if code in _BUCKET_NOT_FOUND_CODES:
+        raise BucketNotFoundError(
+            f"physical bucket for logical bucket '{bucket}' does not exist"
+        ) from error
     if code in _NOT_FOUND_CODES:
         raise ObjectNotFoundError(f"{bucket}/{key} not found") from error
     if code in _PERMISSION_DENIED_CODES:
         raise PermissionDeniedError(f"permission denied for {bucket}/{key}") from error
     raise ObjectStorageError(
         f"S3 operation failed for {bucket}/{key}: {error}"
+    ) from error
+
+
+def _raise_for_presign_error(
+    error: ClientError | BotoCoreError, *, bucket: str, key: str
+) -> NoReturn:
+    """署名付きURL生成時の例外を正規化する。
+
+    署名はローカル計算のため、主な失敗要因は認証情報の欠如
+    （``NoCredentialsError``）やパラメータ検証エラー（``BotoCoreError``系）。
+    """
+    if isinstance(error, ClientError):
+        _raise_for_client_error(error, bucket=bucket, key=key)
+    raise ObjectStorageError(
+        f"failed to generate S3 presigned URL for {bucket}/{key}: {error}"
     ) from error
 
 
@@ -76,7 +103,6 @@ class S3ObjectStorage(ObjectStorage):
             resp = await self._client.get_object(Bucket=physical, Key=key)
         except ClientError as error:
             _raise_for_client_error(error, bucket=bucket, key=key)
-            raise
         async with resp["Body"] as stream:
             return await stream.read()
 
@@ -88,7 +114,6 @@ class S3ObjectStorage(ObjectStorage):
             resp = await self._client.get_object(Bucket=physical, Key=key)
         except ClientError as error:
             _raise_for_client_error(error, bucket=bucket, key=key)
-            raise
         async with resp["Body"] as stream:
             while chunk := await stream.read(chunk_size):
                 yield chunk
@@ -99,7 +124,6 @@ class S3ObjectStorage(ObjectStorage):
             resp = await self._client.head_object(Bucket=physical, Key=key)
         except ClientError as error:
             _raise_for_client_error(error, bucket=bucket, key=key)
-            raise
         return ObjectInfo(
             bucket=bucket,
             key=key,
@@ -121,7 +145,16 @@ class S3ObjectStorage(ObjectStorage):
     async def list(self, bucket, prefix="") -> AsyncIterator[ObjectInfo]:
         physical = self._resolve_bucket(bucket)
         paginator = self._client.get_paginator("list_objects_v2")
-        async for page in paginator.paginate(Bucket=physical, Prefix=prefix):
+        pages = aiter(paginator.paginate(Bucket=physical, Prefix=prefix))
+        while True:
+            # SDK例外だけを正規化の対象にし、呼び出し側（async forの本体）から
+            # ジェネレータへ投げ込まれる例外を巻き込まないよう、yieldはtryの外に置く。
+            try:
+                page = await anext(pages)
+            except StopAsyncIteration:
+                return
+            except ClientError as error:
+                _raise_for_client_error(error, bucket=bucket, key=prefix)
             for item in page.get("Contents", []):
                 yield ObjectInfo(
                     bucket=bucket,
@@ -135,11 +168,14 @@ class S3ObjectStorage(ObjectStorage):
 
     async def presigned_download_url(self, bucket, key, *, expires: timedelta) -> str:
         physical = self._resolve_bucket(bucket)
-        return await self._client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": physical, "Key": key},
-            ExpiresIn=int(expires.total_seconds()),
-        )
+        try:
+            return await self._client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": physical, "Key": key},
+                ExpiresIn=int(expires.total_seconds()),
+            )
+        except (ClientError, BotoCoreError) as error:
+            _raise_for_presign_error(error, bucket=bucket, key=key)
 
     async def presigned_upload_url(
         self, bucket, key, *, expires: timedelta, content_type=None
@@ -148,11 +184,14 @@ class S3ObjectStorage(ObjectStorage):
         params: dict[str, Any] = {"Bucket": physical, "Key": key}
         if content_type is not None:
             params["ContentType"] = content_type
-        return await self._client.generate_presigned_url(
-            "put_object",
-            Params=params,
-            ExpiresIn=int(expires.total_seconds()),
-        )
+        try:
+            return await self._client.generate_presigned_url(
+                "put_object",
+                Params=params,
+                ExpiresIn=int(expires.total_seconds()),
+            )
+        except (ClientError, BotoCoreError) as error:
+            _raise_for_presign_error(error, bucket=bucket, key=key)
 
     async def begin_multipart(
         self, bucket, key, *, content_type=None, metadata=None
@@ -167,7 +206,6 @@ class S3ObjectStorage(ObjectStorage):
             resp = await self._client.create_multipart_upload(**kwargs)
         except ClientError as error:
             _raise_for_client_error(error, bucket=bucket, key=key)
-            raise
         return _S3MultipartUpload(
             client=self._client,
             bucket=bucket,
@@ -205,10 +243,14 @@ class _S3MultipartUpload(MultipartUpload):
             )
         except ClientError as error:
             _raise_for_client_error(error, bucket=self._bucket, key=self._key)
-            raise
         self._parts[part_number] = resp["ETag"]
 
     async def complete(self) -> ObjectInfo:
+        if not self._parts:
+            raise ObjectStorageError(
+                f"cannot complete multipart upload for {self._bucket}/{self._key}: "
+                "no parts have been uploaded"
+            )
         parts = [
             {"PartNumber": number, "ETag": etag}
             for number, etag in sorted(self._parts.items())
@@ -225,7 +267,6 @@ class _S3MultipartUpload(MultipartUpload):
             )
         except ClientError as error:
             _raise_for_client_error(error, bucket=self._bucket, key=self._key)
-            raise
         return ObjectInfo(
             bucket=self._bucket,
             key=self._key,
@@ -244,4 +285,6 @@ class _S3MultipartUpload(MultipartUpload):
                 UploadId=self._upload_id,
             )
         except ClientError as error:
+            if error.response.get("Error", {}).get("Code") == "NoSuchUpload":
+                return  # 既に完了・中止済みのセッションは後始末不要（冪等化）
             _raise_for_client_error(error, bucket=self._bucket, key=self._key)

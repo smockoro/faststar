@@ -130,3 +130,10 @@ async def test_azure_scheme_dispatches_to_blob_service_client(
     assert captured["account_url"] == "https://example.blob.core.windows.net"
     assert captured["credential"] == "fake-key"
     assert captured["kwargs"] == {}
+
+
+@pytest.mark.asyncio
+async def test_azure_scheme_without_account_url_raises_type_error():
+    with pytest.raises(TypeError, match="account_url"):
+        async with open_object_storage("azure", {"uploads": "uploads-x7f3"}):
+            pass

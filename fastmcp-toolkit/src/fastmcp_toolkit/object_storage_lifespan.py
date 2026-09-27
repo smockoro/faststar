@@ -5,8 +5,9 @@ Starlette向けの
 ライフサイクルの形が異なる（``app.state`` に書き込む``asynccontextmanager``
 ではなく、dictをyieldする非同期ジェネレータ）ため、独立したlifespan配線を
 持つ。ABC・各バックエンドアダプタ自体はFastAPI/FastMCP非依存の
-``core_toolkit.object_storage``をそのまま使う（fastapi-toolkit経由にしない。
-[[project_lifespan_di_layering]]の層分けに従う）。DIは``fastmcp``が内部で
+``core_toolkit.object_storage``をそのまま使う（実体はcore-toolkitに置き、
+各toolkitはlifespan/DI配線のみを持つという層分けに従い、fastapi-toolkit
+経由にはしない）。DIは``fastmcp``が内部で
 使う``uncalled_for.Depends``に乗せる。名前付きで複数バックエンドを同時に
 利用でき、``|``演算子で他のlifespanと合成できる。
 

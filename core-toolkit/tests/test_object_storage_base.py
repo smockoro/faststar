@@ -231,3 +231,17 @@ async def test_download_file_writes_stream_to_path(
     await storage.download_file("uploads", "a.txt", dest)
 
     assert dest.read_bytes() == b"hello world"
+
+
+class _AbortFailingUpload(RecordingMultipartUpload):
+    async def abort(self) -> None:
+        raise RuntimeError("abort failed")
+
+
+@pytest.mark.asyncio
+async def test_aexit_does_not_mask_original_exception_when_abort_fails():
+    upload = _AbortFailingUpload("uploads", "a.bin")
+
+    with pytest.raises(ValueError, match="original"):
+        async with upload:
+            raise ValueError("original")

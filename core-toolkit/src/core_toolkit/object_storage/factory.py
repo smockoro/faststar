@@ -34,6 +34,7 @@ async def open_object_storage(
 
     Raises:
         ValueError: ``scheme``が未知の場合。
+        TypeError: ``scheme="azure"``で``account_url``が指定されていない場合。
         ModuleNotFoundError: 対応するextraがインストールされていない場合。
     """
     if scheme == "s3":
@@ -71,7 +72,13 @@ async def open_object_storage(
         from core_toolkit.object_storage.azure import AzureObjectStorage
 
         remaining_kwargs = dict(client_kwargs)
-        account_url = remaining_kwargs.pop("account_url")
+        try:
+            account_url = remaining_kwargs.pop("account_url")
+        except KeyError:
+            raise TypeError(
+                "scheme='azure' requires the 'account_url' keyword argument "
+                "(e.g. account_url='https://<account>.blob.core.windows.net')."
+            ) from None
         credential = remaining_kwargs.pop("credential", None)
         account_key = remaining_kwargs.pop("account_key", None)
         async with BlobServiceClient(

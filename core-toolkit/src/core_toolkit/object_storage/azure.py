@@ -4,8 +4,10 @@
 """
 
 import base64
+import uuid
 from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime, timedelta
+from typing import NoReturn
 
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 from azure.storage.blob import (
@@ -17,6 +19,8 @@ from azure.storage.blob import (
 from azure.storage.blob.aio import BlobServiceClient
 
 from core_toolkit.object_storage.base import (
+    MAX_PART_NUMBER,
+    BucketNotFoundError,
     MultipartUpload,
     NotSupportedError,
     ObjectInfo,
@@ -26,8 +30,30 @@ from core_toolkit.object_storage.base import (
     PermissionDeniedError,
 )
 
+_CONTAINER_NOT_FOUND_CODE = "ContainerNotFound"
 
-def _raise_for_http_error(error: HttpResponseError, *, bucket: str, key: str) -> None:
+
+def _is_container_not_found(error: HttpResponseError) -> bool:
+    """エラーがコンテナ（物理バケット）不在によるものかを判定する。
+
+    ``ResourceNotFoundError``はコンテナ不在・blob不在の両方で送出されるため、
+    ``x-ms-error-code``由来の``error_code``で区別する。``error_code``は
+    ``StorageErrorCode``（str系Enum）または素の``str``のことがある。
+    """
+    code = getattr(error, "error_code", None)
+    return getattr(code, "value", code) == _CONTAINER_NOT_FOUND_CODE
+
+
+def _raise_for_http_error(
+    error: HttpResponseError, *, bucket: str, key: str
+) -> NoReturn:
+    """``HttpResponseError``をObjectStorageの例外階層へ正規化して送出する。"""
+    if _is_container_not_found(error):
+        raise BucketNotFoundError(
+            f"physical container for logical bucket '{bucket}' does not exist"
+        ) from error
+    if isinstance(error, ResourceNotFoundError):
+        raise ObjectNotFoundError(f"{bucket}/{key} not found") from error
     if getattr(error, "status_code", None) == 403:
         raise PermissionDeniedError(f"permission denied for {bucket}/{key}") from error
     raise ObjectStorageError(
@@ -90,11 +116,8 @@ class AzureObjectStorage(ObjectStorage):
         try:
             downloader = await blob.download_blob()
             return await downloader.readall()
-        except ResourceNotFoundError as error:
-            raise ObjectNotFoundError(f"{bucket}/{key} not found") from error
         except HttpResponseError as error:
             _raise_for_http_error(error, bucket=bucket, key=key)
-            raise
 
     async def get_stream(
         self, bucket, key, *, chunk_size=64 * 1024
@@ -102,11 +125,8 @@ class AzureObjectStorage(ObjectStorage):
         blob = self._blob_client(bucket, key)
         try:
             downloader = await blob.download_blob()
-        except ResourceNotFoundError as error:
-            raise ObjectNotFoundError(f"{bucket}/{key} not found") from error
         except HttpResponseError as error:
             _raise_for_http_error(error, bucket=bucket, key=key)
-            raise
         async for chunk in downloader.chunks():
             yield chunk
 
@@ -114,11 +134,8 @@ class AzureObjectStorage(ObjectStorage):
         blob = self._blob_client(bucket, key)
         try:
             props = await blob.get_blob_properties()
-        except ResourceNotFoundError as error:
-            raise ObjectNotFoundError(f"{bucket}/{key} not found") from error
         except HttpResponseError as error:
             _raise_for_http_error(error, bucket=bucket, key=key)
-            raise
         return ObjectInfo(
             bucket=bucket,
             key=key,
@@ -135,15 +152,28 @@ class AzureObjectStorage(ObjectStorage):
         blob = self._blob_client(bucket, key)
         try:
             await blob.delete_blob()
-        except ResourceNotFoundError:
-            return  # Azureは404相当を返すため、存在しない場合は成功扱いにして冪等化する
+        except ResourceNotFoundError as error:
+            if _is_container_not_found(error):
+                _raise_for_http_error(error, bucket=bucket, key=key)
+            # blobが存在しない場合は成功扱いにして冪等化する（コンテナ不在は
+            # 設定ミスなので冪等化せずBucketNotFoundErrorにする）
+            return
         except HttpResponseError as error:
             _raise_for_http_error(error, bucket=bucket, key=key)
 
     async def list(self, bucket, prefix="") -> AsyncIterator[ObjectInfo]:
         physical = self._resolve_bucket(bucket)
         container = self._client.get_container_client(physical)
-        async for props in container.list_blobs(name_starts_with=prefix):
+        blobs = aiter(container.list_blobs(name_starts_with=prefix))
+        while True:
+            # SDK例外だけを正規化し、async for本体からジェネレータへ投げ込まれる
+            # 例外を巻き込まないよう、yieldはtryの外に置く。
+            try:
+                props = await anext(blobs)
+            except StopAsyncIteration:
+                return
+            except HttpResponseError as error:
+                _raise_for_http_error(error, bucket=bucket, key=prefix)
             yield ObjectInfo(
                 bucket=bucket,
                 key=props.name,
@@ -164,6 +194,26 @@ class AzureObjectStorage(ObjectStorage):
     async def presigned_upload_url(
         self, bucket, key, *, expires: timedelta, content_type=None
     ) -> str:
+        """アップロード（PUT）用のSAS付きURLを生成する。
+
+        Azureでは``content_type``は署名に反映されない（SASの仕組み上、S3のように
+        アップロード時のContent-Typeを署名で強制できない）。アップロードする
+        クライアント側で``x-ms-blob-content-type``ヘッダを付けること。
+        また、PUTで``Put Blob``を行うには``x-ms-blob-type: BlockBlob``ヘッダが
+        必要。
+
+        Args:
+            bucket: 論理コンテナ名。
+            key: blob名。
+            expires: URLの有効期間。
+            content_type: Azureでは無視される（ABC互換のために受け取る）。
+
+        Returns:
+            SAS付きURL。
+
+        Raises:
+            NotSupportedError: ``account_key``が設定されていない場合。
+        """
         return await self._generate_sas_url(
             bucket,
             key,
@@ -212,8 +262,18 @@ class AzureObjectStorage(ObjectStorage):
 class _AzureMultipartUpload(MultipartUpload):
     """Azureの``stage_block``/``commit_block_list``をラップする。
 
-    未コミットのブロックは``abort()``を呼ばなくても7日で自動破棄されるため、
-    ``abort()``は追加の後始末を行わない。
+    未コミットのブロックはblob単位でサーバー側に共有されるため、ブロックIDに
+    セッションごとの``session_id``を含め、同じキーへの並行セッション間で
+    ブロックが混ざらないようにする（同一blob内でブロックIDの長さを揃える
+    必要があるため、``uuid4().hex``の32文字＋8桁のパート番号で固定長にする）。
+
+    ただしAzureは``Put Block List``（``complete()``）や``Put Blob``（``put``）の
+    成功時に、そのblobのリストに含まれない未コミットブロックを破棄する。
+    そのため同じキーへの並行セッションでは、後から``complete()``した側が
+    ``ObjectStorageError``で失敗しうる（データが混ざることは無い）。
+
+    未コミットのブロックは``abort()``を呼ばなくても7日で自動破棄され、また
+    個別に削除するAPIも無いため、``abort()``は追加の後始末を行わない。
     """
 
     def __init__(
@@ -230,10 +290,18 @@ class _AzureMultipartUpload(MultipartUpload):
         self._key = key
         self._content_type = content_type
         self._metadata = metadata
+        self._session_id = uuid.uuid4().hex
         self._block_ids: dict[int, str] = {}
 
     async def upload_part(self, part_number: int, data: bytes) -> None:
-        block_id = base64.b64encode(f"{part_number:08d}".encode()).decode()
+        if not (1 <= part_number <= MAX_PART_NUMBER):
+            raise ObjectStorageError(
+                f"part_number must be between 1 and {MAX_PART_NUMBER}, "
+                f"got {part_number}"
+            )
+        block_id = base64.b64encode(
+            f"{self._session_id}-{part_number:08d}".encode()
+        ).decode()
         try:
             await self._blob.stage_block(block_id, data)
         except HttpResponseError as error:
@@ -241,6 +309,11 @@ class _AzureMultipartUpload(MultipartUpload):
         self._block_ids[part_number] = block_id
 
     async def complete(self) -> ObjectInfo:
+        if not self._block_ids:
+            raise ObjectStorageError(
+                f"cannot complete multipart upload for {self._bucket}/{self._key}: "
+                "no parts have been uploaded"
+            )
         block_list = [
             BlobBlock(block_id=self._block_ids[n]) for n in sorted(self._block_ids)
         ]
@@ -256,7 +329,6 @@ class _AzureMultipartUpload(MultipartUpload):
             props = await self._blob.get_blob_properties()
         except HttpResponseError as error:
             _raise_for_http_error(error, bucket=self._bucket, key=self._key)
-            raise
         return ObjectInfo(
             bucket=self._bucket,
             key=self._key,

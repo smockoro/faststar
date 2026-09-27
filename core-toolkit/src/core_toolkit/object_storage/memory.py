@@ -159,6 +159,11 @@ class _InMemoryMultipartUpload(MultipartUpload):
 
     async def complete(self) -> ObjectInfo:
         numbers = sorted(self._parts)
+        if not numbers:
+            raise ObjectStorageError(
+                f"cannot complete multipart upload for {self._bucket}/{self._key}: "
+                "no parts have been uploaded"
+            )
         for number in numbers[:-1]:
             if len(self._parts[number]) < self._min_part_size:
                 raise ObjectStorageError(
