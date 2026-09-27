@@ -25,7 +25,11 @@ from fastmcp_toolkit.config.application_config import (
 from fastmcp_toolkit.health import ReadinessCheck, register_health_endpoints
 from fastmcp_toolkit.logging import setup_logging
 from fastmcp_toolkit.metrics import register_metrics_endpoint
-from fastmcp_toolkit.middleware import ErrorLoggerMiddleware, LogContextMiddleware
+from fastmcp_toolkit.middleware import (
+    ErrorHandlingMiddleware,
+    ErrorLoggerMiddleware,
+    LogContextMiddleware,
+)
 from fastmcp_toolkit.middleware.tool_metrics import ToolMetricsMiddleware
 from fastmcp_toolkit.middleware.tool_visibility import ToolVisibilityMiddleware
 
@@ -86,6 +90,7 @@ def run_server(
 
     app.add_middleware(LogContextMiddleware())
     app.add_middleware(ErrorLoggerMiddleware())
+    app.add_middleware(ErrorHandlingMiddleware())
     app.add_middleware(
         ToolVisibilityMiddleware(
             application_config.invisible_target_prefix,
