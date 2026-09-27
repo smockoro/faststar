@@ -2,7 +2,7 @@
 
 - 日付: 2026-09-28
 - スコープ: `core-toolkit` / `fastapi-toolkit` / `fastmcp-toolkit`
-- ステータス: ドラフト（設計方針の検討記録。実装はまだ着手しない。[Issue #2](https://github.com/smockoro/faststar/issues/2)の後継検討）
+- ステータス: 実装済み（[Issue #2](https://github.com/smockoro/faststar/issues/2)の後継検討として作成した設計を実装。fastmcp-toolkit部分は実装中に本ドキュメントの誤りが発覚し訂正済み。詳細は「実装時に判明した訂正点」参照）
 
 ## 背景・目的
 
@@ -56,12 +56,12 @@ class Problem(Exception):
 | エラー種別の識別 | `error_code: str` をインスタンス属性として持つ。型ではなく値で識別する | 増え続けるエラー種別を型で表現すると破綻する。MKC調査で「型を増やさない」設計が現実解だと確認できた |
 | HTTPステータスの解決 | fastapi-toolkitに `ErrorCodeRegistry`（`error_code -> http_status`）を置く。未登録の`error_code`は例外の型からデフォルト（Business→400 / System→500）にフォールバック | HTTPは`error_code`ごとの多段階な分類が必要なプロトコルなので、テーブルを引く意味がある |
 | JSON-RPCコードの解決 | **持たない**。fastmcp-toolkit側にはレジストリを置かない | MCPツール呼び出しの失敗は`CallToolResult.isError: bool`という2値でしか表現されない。JSON-RPCの`error`（-32xxx）はメソッド不明等ごく一部のプロトコルレベルのケース専用で、アプリ例外はそこに乗らない。変換先の多様性が実質ゼロなのでテーブルは過剰設計 |
-| fastmcp-toolkit側のレスポンス | `CallToolResult(isError=True, content=[TextContent(text=f"[{error_code}] {message}")])` を自前で組み立てる | 標準の`_make_error_result`相当は`content`のみを使う実装。`structuredContent`は`outputSchema`との契約と衝突しうるため今回は使わない |
+| fastmcp-toolkit側のレスポンス | `ToolResult(is_error=True, content=[TextContent(text=f"[{error_code}] {message}")])`（`fastmcp.tools.base.ToolResult`）を自前で組み立てる | ※実装時に訂正: 当初`mcp.types.CallToolResult`を想定していたが、FastMCP 3.4.2の`tools/call`ミドルウェアパイプラインは戻り値に`.to_mcp_result()`を要求し、これは`fastmcp.tools.base.ToolResult`にしかない（`CallToolResult`を返すと`AttributeError`で壊れる）。詳細は「実装時に判明した訂正点」参照 |
 | `ErrorCodeRegistry`のデータソース | Registryの型・解決ロジックと、データの構築元を分離する。今はコード内リテラルの`dict`で組み立てる | 「設定値管理部品」（別Issue予定）がまだ存在しないため。将来、設定ファイルをパースして`dict`を作るローダー関数を1つ足すだけで差し替えられるようにしておく |
 | レジストリのライフサイクル | シングルトンのlifespan resource。DB/Redis/ObjectStorageのような名前付き複数インスタンスにはしない | 1アプリ内で`error_code`名前空間を複数持ちたい実需がない |
 | レジストリの配置場所 | fastapi-toolkit: `app.state` / fastmcp-toolkit: `lifespan_context` | `exception_handlers`とASGIミドルウェアは、どちらもFastAPIの`Depends`注入の対象外。Dependsで渡せないため、両者から参照できる共有領域として使う（DB接続lifespanが主にDependsでルートハンドラに渡すために使われているのとは、使われ方の目的が異なる） |
 | fastapi-toolkitの実装構成 | Issue本文どおり二層（`exception_handlers` + 一番外側の安全網ASGIミドルウェア） | StarletteのExceptionMiddlewareがルーター内で解決するため、ルートハンドラ由来の例外は`exception_handlers`が処理し、安全網ミドルウェアには伝播しない（二重処理にはならない）。認証・レート制限等のユーザー定義ミドルウェア由来の例外だけ安全網が拾う |
-| fastmcp-toolkitの実装構成 | 一番外側に登録するエラー変換用`Middleware`1つのみ。二層構成は不要 | `Middleware.on_message`は`call_next`を挟むオニオン構造で、外側1つの`try/except`で内側の全Middleware・ツール実行の例外を拾える。fastapiのような「Dependsが届く/届かない」の分断が存在しない |
+| fastmcp-toolkitの実装構成 | エラー変換用`Middleware`1つのみ（二層構成は不要）。ただし**登録位置は「一番外側」ではなく、既存の`ErrorLoggerMiddleware`より内側**（`ErrorLoggerMiddleware`を先に`add_middleware`し、この`Middleware`を後で`add_middleware`する） | ※実装時に訂正: FastMCPのミドルウェアは`_run_middleware`が`for mw in reversed(self.middleware)`でチェーンを構築するため、**内側に置いたミドルウェアが先に例外を見る**（外側は内側の再raiseを最後に受け取るだけ）。全例外をログしてre-raiseするだけの`ErrorLoggerMiddleware`が既に存在するため、変換用ミドルウェアを外側に置くと`ApplicationProblem`が必ず先に`ErrorLoggerMiddleware`でログされてから届いてしまい二重ログになる。内側に置き、かつ`ApplicationProblem`をそこで完結させる（re-raiseしない）ことで、`ApplicationProblem`は外側の`ErrorLoggerMiddleware`には例外として届かずログされない。詳細は「実装時に判明した訂正点」参照 |
 
 ## アーキテクチャ
 
@@ -126,20 +126,30 @@ async def handle_application_error(request: Request, exc: ApplicationProblem) ->
 
 安全網ミドルウェア（`ErrorHandlingMiddleware`）は、上記と同じ変換ロジックを`scope["app"].state.error_mapping`経由で呼び出す。ロジックの重複を避けるため、変換関数自体は`exception_handler`とミドルウェアの共通ヘルパーとして1箇所に実装する。
 
+※実装時に追加: `SystemProblem`の`message`はそのままクライアントに返すと内部情報（ホスト名・SQL・内部ID等）を漏らしうるため、`detail`は`SystemProblem`の場合のみ固定文言（"Internal server error"）にマスクする。`error_code`（`title`）は`SystemProblem`でも引き続き返す。`BusinessProblem`は従来どおり`message`をそのまま返す（クライアント起因のエラーで、詳細を返す意味があるため）。fastmcp-toolkit側の`TextContent`も同様にマスクする。
+
 ### fastmcp-toolkit: 型ベースの変換（レジストリ不要）
+
+※以下は実装時の訂正を反映した最終形。当初案（`on_message`フック・`CallToolResult`を返す）が動かなかった経緯は「実装時に判明した訂正点」参照。
 
 ```python
 # fastmcp_toolkit/middleware/error_handling.py
 class ErrorHandlingMiddleware(Middleware):
-    async def on_message(self, context, call_next):
+    # ErrorLoggerMiddlewareより内側に登録すること（add_middlewareはErrorLoggerMiddlewareの後）。
+    async def on_call_tool(self, context, call_next):
         try:
             return await call_next(context)
-        except ApplicationProblem as exc:
-            log = self.logger.warning if isinstance(exc, BusinessProblem) else self.logger.error
-            log(f"{exc.error_code}: {exc.message}", exc_type=type(exc).__name__)
-            return CallToolResult(
-                isError=True,
-                content=[TextContent(type="text", text=f"[{exc.error_code}] {exc.message}")],
+        except Exception as exc:
+            # FastMCPの実装は、ツール呼び出し時の例外をToolErrorでラップしてから
+            # `raise ToolError(...) from e`で送出する。元の例外は__cause__にある。
+            cause = exc.__cause__ if isinstance(exc, ToolError) else exc
+            if not isinstance(cause, ApplicationProblem):
+                raise  # ApplicationProblem以外はそのまま素通し
+            log = self.logger.warning if isinstance(cause, BusinessProblem) else self.logger.exception
+            log(f"{cause.error_code}: {cause.message}", exc_type=type(cause).__name__)
+            return ToolResult(  # fastmcp.tools.base.ToolResult（CallToolResultではない）
+                is_error=True,
+                content=[TextContent(type="text", text=f"[{cause.error_code}] {cause.message}")],
             )
 ```
 
@@ -166,6 +176,17 @@ def open_error_mapping(mappings: dict[str, ErrorCodeMapping] | None = None) -> E
 Issue #2本文にある「fastmcp-toolkit は JSON-RPC エラー形式へ」という記述は、MCP/FastMCPの実装（`mcp/server/lowlevel/server.py`の`call_tool`ハンドラ）を確認した結果、不正確だと判明した。ツール呼び出しの例外は、JSON-RPCの`error`オブジェクトではなく、**正常なレスポンス(`result`)の中の`CallToolResult(isError=True)`**に変換される。真のJSON-RPC `error`はメソッド不明等ごく一部のプロトコルレベルのケース専用で、アプリケーション例外はそこに乗らない。Issue #2側もこの記述を訂正する。
 
 同様に、方針4「実装は二層構成」もfastapi-toolkit固有の事情に基づくものであり、fastmcp-toolkit側はMiddlewareのオニオン構造により単層で足りる。
+
+## 実装時に判明した訂正点
+
+本ドキュメント（意思決定サマリー含む）は当初、MCP lowlevelサーバー（`mcp/server/lowlevel/server.py`）の`call_tool`ハンドラの挙動のみを根拠に、fastmcp-toolkit側の設計（`Middleware.on_message`フック・`CallToolResult`を返す・一番外側に登録）を決定していた。しかし実際にインストールされている**FastMCP 3.4.2**自体の挙動を、実装フェーズの最終レビューで実機（実`FastMCP`インスタンス + `fastmcp.Client`）を使って検証した結果、以下の2点が誤りだと判明し、実装・本ドキュメントともに訂正した。
+
+1. **ツール呼び出しの例外は`ToolError`でラップされてからミドルウェアに届く**: FastMCPの`FastMCP.call_tool`（`fastmcp/server/server.py`）は、ツール関数が送出した例外を`raise ToolError(f"...") from e`という形で必ず`ToolError`にラップしてからミドルウェアチェーンに伝播させる。そのため`except ApplicationProblem`では素通りしてしまい一致しない。`ToolError.__cause__`から元の例外を取り出す必要がある。
+2. **ミドルウェアの戻り値は`CallToolResult`ではなく`fastmcp.tools.base.ToolResult`でなければならない**: `tools/call`のミドルウェアパイプライン（`fastmcp/server/mixins/mcp_operations.py`）は、ミドルウェアの戻り値に対して`.to_mcp_result()`を呼び出す。このメソッドは`ToolResult`にしかなく、`mcp.types.CallToolResult`を返すと`AttributeError`で実行時に壊れる。
+3. （上記2点に伴い）フックは全メソッドを対象にする`on_message`ではなく、`tools/call`専用の`on_call_tool`に限定した。`CallToolResult`/`ToolResult`はtools/call以外（`resources/read`等）には意味を持たないため、`on_message`のままでは対象範囲が広すぎた。
+4. **登録位置は「一番外側」ではなく、既存の`ErrorLoggerMiddleware`より内側**にする必要があった（詳細は意思決定サマリーの当該行参照）。
+
+これらの誤りは、当初のTask別レビュー（実FastMCPを介さずMiddlewareの`on_message`を直接呼び出す単体テストのみで検証していた）では検出できず、全Task完了後の最終レビューで実`FastMCP`インスタンスと`fastmcp.Client`を使った統合テストを追加して初めて発覚した。教訓として、外部フレームワークの内部挙動（例外のラップ方式・戻り値の型契約）を前提にする設計・実装は、フレームワークのソースを読むだけでなく、実インスタンスを1回でも通して検証することを完了条件に含めるべきである。
 
 ## 未決事項（別途検討）
 
