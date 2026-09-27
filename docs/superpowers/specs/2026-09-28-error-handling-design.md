@@ -1,4 +1,4 @@
-# エラー処理系部品 設計検討（BusinessError/SystemError分類 + API/MCP出口分離）
+# エラー処理系部品 設計検討（BusinessProblem/SystemProblem分類 + API/MCP出口分離）
 
 - 日付: 2026-09-28
 - スコープ: `core-toolkit` / `fastapi-toolkit` / `fastmcp-toolkit`
@@ -25,7 +25,7 @@ Issue #2本文の要点（前提として踏襲する）:
 ## 非スコープ（意図的に今回は決めない）
 
 - `error_code` の命名規則（ドット区切り階層にするか等）
-- `msal_errors.py`（`MsalTokenError`系）の統合方法（`SystemError`のサブクラスにするか、独立のまま残すか）
+- `msal_errors.py`（`MsalTokenError`系）の統合方法（`SystemProblem`のサブクラスにするか、独立のまま残すか）
 - ログ記録（structlog / OpenTelemetry span）を`exception_handler`側と安全網ミドルウェア側のどちらの責務にするか、二重記録の防止
 - 設定値管理部品そのものの設計（別Issueで検討予定。本ドキュメントでは「差し替えポイントを用意する」ところまで）
 - fastmcp-toolkit側で`structuredContent`を使う設計（将来、機械的なエラーハンドリングの需要が出た場合に再検討）
@@ -44,7 +44,7 @@ class Problem(Exception):
     data: dict[str, Any] | None = None
 ```
 
-呼び出し側は`raise Problem("User not found", status=404)`のように`Problem`を直接インスタンス化する。`BusinessError`/`SystemError`のような型分類も、`NotFoundError`のような個別サブクラスも存在せず、`status >= 500`かどうかでログレベルを分けている（`api/utils/middleware.py`の`handle_problem`）。
+呼び出し側は`raise Problem("User not found", status=404)`のように`Problem`を直接インスタンス化する。`BusinessProblem`/`SystemProblem`のような型分類も、`NotFoundError`のような個別サブクラスも存在せず、`status >= 500`かどうかでログレベルを分けている（`api/utils/middleware.py`の`handle_problem`）。
 
 「クラスを増やし続ける問題」への解の一つとして参考にしたが、`status: int`というHTTP語彙をcore相当の型が直接持つ設計であり、MCP出口を持たないfaststarにはそのまま持ち込めない（後述のとおり、faststarでは`error_code`という抽象値からtoolkitごとに解決する形にする）。ただし「二層構成（`exception_handlers` + `ProblemExceptionMiddleware`）」自体は実装を確認でき、ユーザー定義ミドルウェア（`RateLimitByIPMiddleware`）が送出した`Problem`も安全網側で正しく拾えていた。
 
@@ -52,7 +52,7 @@ class Problem(Exception):
 
 | 論点 | 決定 | 理由 |
 |---|---|---|
-| 例外クラス階層の深さ | `ApplicationError` → `BusinessError`（既定4xx） / `SystemError`（既定5xx）の2段のみ。個別サブクラス（`NotFoundError`等）は作らない | サブクラスを作り続けるのは非現実的。`error_code`はtoolkit組み込み分＋利用者アプリ側の分でどんどん増えるが、型は増やしたくない |
+| 例外クラス階層の深さ | `ApplicationProblem` → `BusinessProblem`（既定4xx） / `SystemProblem`（既定5xx）の2段のみ。個別サブクラス（`NotFoundError`等）は作らない | サブクラスを作り続けるのは非現実的。`error_code`はtoolkit組み込み分＋利用者アプリ側の分でどんどん増えるが、型は増やしたくない |
 | エラー種別の識別 | `error_code: str` をインスタンス属性として持つ。型ではなく値で識別する | 増え続けるエラー種別を型で表現すると破綻する。MKC調査で「型を増やさない」設計が現実解だと確認できた |
 | HTTPステータスの解決 | fastapi-toolkitに `ErrorCodeRegistry`（`error_code -> http_status`）を置く。未登録の`error_code`は例外の型からデフォルト（Business→400 / System→500）にフォールバック | HTTPは`error_code`ごとの多段階な分類が必要なプロトコルなので、テーブルを引く意味がある |
 | JSON-RPCコードの解決 | **持たない**。fastmcp-toolkit側にはレジストリを置かない | MCPツール呼び出しの失敗は`CallToolResult.isError: bool`という2値でしか表現されない。JSON-RPCの`error`（-32xxx）はメソッド不明等ごく一部のプロトコルレベルのケース専用で、アプリ例外はそこに乗らない。変換先の多様性が実質ゼロなのでテーブルは過剰設計 |
@@ -69,17 +69,17 @@ class Problem(Exception):
 
 ```python
 # core_toolkit/errors.py
-class ApplicationError(Exception):
+class ApplicationProblem(Exception):
     """アプリケーション全体の例外基底。プロトコル非依存。"""
     def __init__(self, error_code: str, message: str) -> None:
         self.error_code = error_code
         self.message = message
         super().__init__(message)
 
-class BusinessError(ApplicationError):
+class BusinessProblem(ApplicationProblem):
     """想定内・クライアント起因のエラー（HTTP: 既定400系）。"""
 
-class SystemError(ApplicationError):
+class SystemProblem(ApplicationProblem):
     """想定外・インフラ起因のエラー（HTTP: 既定500系）。"""
 ```
 
@@ -100,16 +100,16 @@ class ErrorCodeRegistry:
     def __init__(self, mappings: dict[str, ErrorCodeMapping] | None = None) -> None:
         self._mappings = dict(mappings or {})
 
-    def resolve_http_status(self, exc: ApplicationError) -> int:
+    def resolve_http_status(self, exc: ApplicationProblem) -> int:
         mapping = self._mappings.get(exc.error_code)
         if mapping and mapping.http_status is not None:
             return mapping.http_status
-        return 500 if isinstance(exc, SystemError) else 400
+        return 500 if isinstance(exc, SystemProblem) else 400
 ```
 
 ```python
 # fastapi_toolkit側のexception_handler
-async def handle_application_error(request: Request, exc: ApplicationError) -> JSONResponse:
+async def handle_application_error(request: Request, exc: ApplicationProblem) -> JSONResponse:
     resource: ErrorMappingLifespanResource = request.app.state.error_mapping
     status = resource.registry.resolve_http_status(exc)
     return JSONResponse(
@@ -134,8 +134,8 @@ class ErrorHandlingMiddleware(Middleware):
     async def on_message(self, context, call_next):
         try:
             return await call_next(context)
-        except ApplicationError as exc:
-            log = self.logger.warning if isinstance(exc, BusinessError) else self.logger.error
+        except ApplicationProblem as exc:
+            log = self.logger.warning if isinstance(exc, BusinessProblem) else self.logger.error
             log(f"{exc.error_code}: {exc.message}", exc_type=type(exc).__name__)
             return CallToolResult(
                 isError=True,
@@ -170,7 +170,7 @@ Issue #2本文にある「fastmcp-toolkit は JSON-RPC エラー形式へ」と�
 ## 未決事項（別途検討）
 
 - `error_code` の命名規則（例: `domain.reason` のようなドット区切り階層にするか等）
-- `msal_errors.py` の `MsalTokenError` 系を `SystemError` のサブクラスとして統合するか、独立のまま残すか
+- `msal_errors.py` の `MsalTokenError` 系を `SystemProblem` のサブクラスとして統合するか、独立のまま残すか
 - ログ記録（structlog / OpenTelemetry span）を `exception_handler` 側と安全網ミドルウェア側のどちらの責務にするか、二重記録をどう防ぐか
 - `ErrorCodeRegistry` の登録漏れ（未登録`error_code`がデフォルト400/500に落ちる）を起動時やテストでどう検知するか
 - fastmcp-toolkit側で将来 `structuredContent` を使う設計に発展させる必要が出た場合の再検討
