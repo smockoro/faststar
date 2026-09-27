@@ -11,9 +11,11 @@ from core_toolkit.object_storage.base import (
     PermissionDeniedError,
     UnknownBucketError,
 )
+from core_toolkit.object_storage.memory import InMemoryObjectStorage
 
 __all__ = [
     "BucketNotFoundError",
+    "InMemoryObjectStorage",
     "MultipartUpload",
     "NotSupportedError",
     "ObjectInfo",
