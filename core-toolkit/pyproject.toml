@@ -60,6 +60,10 @@ gcs = [
     "gcloud-aio-storage>=9.0",
     "aiohttp>=3.14.1",
 ]
+azure = [
+    "azure-storage-blob[aio]>=12.19",
+    "azure-core>=1.30",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/core_toolkit"]
