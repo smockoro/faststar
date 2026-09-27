@@ -56,6 +56,10 @@ s3 = [
     "aiobotocore>=3.0",
     "botocore",
 ]
+gcs = [
+    "gcloud-aio-storage>=9.0",
+    "aiohttp>=3.14.1",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/core_toolkit"]
