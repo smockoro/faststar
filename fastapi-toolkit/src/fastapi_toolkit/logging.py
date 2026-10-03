@@ -69,7 +69,8 @@ def setup_logging(
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             renderer,
         ],
-        foreign_pre_chain=shared_processors,
+        # 標準loggingの ``extra={...}`` をイベントに含める（structlog側のログには影響しない）。
+        foreign_pre_chain=[*shared_processors, structlog.stdlib.ExtraAdder()],
     )
 
     handler = logging.StreamHandler()
